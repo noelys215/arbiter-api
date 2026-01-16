@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: watchpicker_db
+    environment:
+      POSTGRES_USER: watchpicker
+      POSTGRES_PASSWORD: watchpicker
+      POSTGRES_DB: watchpicker
+    ports:
+      - "5432:5432"
+    volumes:
+      - watchpicker_pgdata:/var/lib/postgresql/data
+
+volumes:
+  watchpicker_pgdata:
