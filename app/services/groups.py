@@ -160,7 +160,7 @@ async def create_group_invite(db: AsyncSession, group_id: UUID, creator_id: UUID
 async def accept_group_invite(db: AsyncSession, user_id: UUID, code: str) -> None:
     now = _now_utc()
 
-    async with db.begin():
+    try:
         invite = (
             await db.execute(
                 sa.select(GroupInvite)
@@ -191,3 +191,7 @@ async def accept_group_invite(db: AsyncSession, user_id: UUID, code: str) -> Non
             db.add(GroupMembership(group_id=invite.group_id, user_id=user_id))
 
         invite.uses_count += 1
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
