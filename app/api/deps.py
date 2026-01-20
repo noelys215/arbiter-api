@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+
 from fastapi import Cookie, Depends, HTTPException, status
 from jose import jwt, JWTError
 from sqlalchemy import select
@@ -11,6 +13,9 @@ from app.models.user import User
 
 COOKIE_NAME = "access_token"
 
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async for session in get_db_session():
+        yield session
 
 async def get_current_user(
     db: AsyncSession = Depends(get_db_session),

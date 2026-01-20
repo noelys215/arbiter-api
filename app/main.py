@@ -1,3 +1,5 @@
+import app.db.base  # noqa: F401
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,6 +11,7 @@ from app.api.routes.me import router as me_router
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 import traceback
+from app.api.routes.friends import router as friends_router
 
 
 
@@ -26,6 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(friends_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(me_router)
