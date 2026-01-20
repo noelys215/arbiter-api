@@ -1,4 +1,5 @@
 import app.db.base  # noqa: F401
+import app.models  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,7 @@ from fastapi.responses import PlainTextResponse
 import traceback
 from app.api.routes.friends import router as friends_router
 
+from app.api.routes.groups import router as groups_router
 
 
 app = FastAPI(title="Watch Picker API", version="0.1.0")
@@ -33,3 +35,4 @@ app.include_router(friends_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(me_router)
+app.include_router(groups_router)
