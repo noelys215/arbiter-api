@@ -70,6 +70,11 @@ async def client(db_session):
 
     fastapi_app.dependency_overrides.pop(get_db_session, None)
 
+
+@pytest.fixture
+async def async_client(client):
+    yield client
+
 # --- Small helpers for your spine tests ---
 
 async def register_user(client: AsyncClient, *, email: str, username: str, display_name: str, password: str):

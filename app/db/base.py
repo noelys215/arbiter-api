@@ -7,3 +7,6 @@ from app.models.friendship import Friendship  # noqa: F401
 from app.models.group import Group  # noqa: F401
 from app.models.group_invite import GroupInvite  # noqa: F401
 from app.models.group_membership import GroupMembership  # noqa: F401
+from app.models.title import Title  # noqa: F401
+from app.models.watchlist_item import WatchlistItem  # noqa: F401
+

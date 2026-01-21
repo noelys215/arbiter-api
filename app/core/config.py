@@ -1,7 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -14,8 +13,9 @@ class Settings(BaseSettings):
 
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
 
+    tmdb_token: str = Field(alias="TMDB_TOKEN")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
 
 settings = Settings()
