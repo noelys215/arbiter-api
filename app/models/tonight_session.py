@@ -9,7 +9,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
 
-
 class TonightSession(Base):
     __tablename__ = "tonight_sessions"
 
@@ -69,3 +68,19 @@ class TonightSession(Base):
     # These will come in Phase 5.2+
     # votes = relationship("TonightVote", back_populates="session")
     # timer = relationship("TonightTimer", uselist=False)
+
+    ends_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="90")
+    candidate_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="12")
+
+    ai_why: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    ai_used: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.text("false"))
+
+    # app/models/tonight_session.py
+    candidates = relationship(
+        "TonightSessionCandidate",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TonightSessionCandidate.position",
+    )

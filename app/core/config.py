@@ -15,6 +15,12 @@ class Settings(BaseSettings):
 
     tmdb_token: str = Field(alias="TMDB_TOKEN")
 
+    # ─────────────────────────────────────────────
+    # OpenAI (Phase 5.2+)
+    # ─────────────────────────────────────────────
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-5-mini", alias="OPENAI_MODEL")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
