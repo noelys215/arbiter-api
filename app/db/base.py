@@ -9,4 +9,5 @@ from app.models.group_invite import GroupInvite  # noqa: F401
 from app.models.group_membership import GroupMembership  # noqa: F401
 from app.models.title import Title  # noqa: F401
 from app.models.watchlist_item import WatchlistItem  # noqa: F401
+from app.models.tonight_session import TonightSession  # noqa: F401
 

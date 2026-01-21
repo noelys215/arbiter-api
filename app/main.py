@@ -19,9 +19,6 @@ from app.api.routes.groups import router as groups_router
 from app.api.routes.tmdb import router as tmdb_router
 from app.api.routes.watchlist import router as watchlist_router
 
-# temp
-from app.api.routes.debug_tmdb import router as debug_tmdb_router
-
 
 
 app = FastAPI(title="Watch Picker API", version="0.1.0")
@@ -45,6 +42,3 @@ app.include_router(me_router)
 app.include_router(groups_router)
 app.include_router(tmdb_router)
 app.include_router(watchlist_router)
-
-# temp
-app.include_router(debug_tmdb_router)
