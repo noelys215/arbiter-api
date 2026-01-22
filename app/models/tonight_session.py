@@ -84,3 +84,16 @@ class TonightSession(Base):
         passive_deletes=True,
         order_by="TonightSessionCandidate.position",
     )
+
+    status: Mapped[str] = mapped_column(sa.String(20), nullable=False, server_default="active")
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    result_watchlist_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("watchlist_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    result_watchlist_item = relationship("WatchlistItem", lazy="joined", foreign_keys=[result_watchlist_item_id])
+
+    votes = relationship("TonightVote", back_populates="session")

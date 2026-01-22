@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.tonight_session import TonightSession
 from app.models.tonight_session_candidate import TonightSessionCandidate
+from app.models.tonight_vote import TonightVote
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.tonight_constraints import TonightConstraints
 from app.services.ai import parse_constraints_with_ai, rerank_candidates_with_ai
@@ -183,3 +185,155 @@ async def create_tonight_session(
 
     # 9) return session + candidates (candidates query w/ joins happens in route)
     return sess, out_candidates
+
+
+
+async def _load_session_with_candidates(db: AsyncSession, session_id: uuid.UUID) -> TonightSession:
+    q = (
+        select(TonightSession)
+        .options(selectinload(TonightSession.candidates).selectinload(TonightSessionCandidate.watchlist_item).selectinload(WatchlistItem.title))
+        .where(TonightSession.id == session_id)
+    )
+    s = (await db.execute(q)).scalar_one_or_none()
+    if not s:
+        raise ValueError("Session not found")
+    return s
+
+
+async def _assert_session_active(s: TonightSession) -> None:
+    if s.status != "active":
+        raise ValueError("Session is complete")
+    
+
+async def cast_vote(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_id: uuid.UUID,
+    watchlist_item_id: uuid.UUID,
+    vote: str,
+    ) -> None:
+    s = await _load_session_with_candidates(db, session_id)
+    await assert_user_in_group(db, s.group_id, user_id)
+    await _assert_session_active(s)
+
+    allowed = {c.watchlist_item_id for c in s.candidates}
+    if watchlist_item_id not in allowed:
+        raise ValueError("watchlist_item_id is not in this session deck")
+
+    q = select(TonightVote).where(TonightVote.session_id == session_id, TonightVote.user_id == user_id)
+    existing = (await db.execute(q)).scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    if existing:
+        existing.watchlist_item_id = watchlist_item_id
+        existing.vote = vote
+        existing.updated_at = now
+        return
+
+    v = TonightVote(
+        session_id=session_id,
+        user_id=user_id,
+        watchlist_item_id=watchlist_item_id,
+        vote=vote,
+        updated_at=now,
+    )
+    db.add(v)
+
+
+async def resolve_if_expired(db: AsyncSession, *, session_id: uuid.UUID) -> TonightSession:
+    s = await _load_session_with_candidates(db, session_id)
+
+    if s.status != "active":
+        return s
+
+    now = datetime.now(timezone.utc)
+    if s.ends_at > now:
+        return s
+
+    winner_item_id = await _compute_winner(db, s)
+    s.status = "complete"
+    s.completed_at = now
+    s.result_watchlist_item_id = winner_item_id
+    return s
+
+
+async def _compute_winner(db: AsyncSession, s: TonightSession) -> uuid.UUID:
+    deck_item_ids = [c.watchlist_item_id for c in sorted(s.candidates, key=lambda x: x.position)]
+    if not deck_item_ids:
+        raise ValueError("Session has no candidates")
+
+    # Aggregate votes
+    q = (
+        select(
+            TonightVote.watchlist_item_id.label("item_id"),
+            func.sum(sa.case((TonightVote.vote == "yes", 1), else_=0)).label("yes_count"),
+            func.sum(sa.case((TonightVote.vote == "no", 1), else_=0)).label("no_count"),
+        )
+        .where(TonightVote.session_id == s.id)
+        .group_by(TonightVote.watchlist_item_id)
+    )
+    rows = (await db.execute(q)).all()
+
+    # Build map for deck items (missing rows => 0/0)
+    stats = {item_id: {"yes": 0, "no": 0} for item_id in deck_item_ids}
+    for item_id, yes_count, no_count in rows:
+        if item_id in stats:
+            stats[item_id]["yes"] = int(yes_count or 0)
+            stats[item_id]["no"] = int(no_count or 0)
+
+    # If nobody voted at all: deterministic random from deck
+    if all(v["yes"] == 0 and v["no"] == 0 for v in stats.values()):
+        rng = random.Random(str(s.id))
+        return rng.choice(deck_item_ids)
+
+    # winner = max YES
+    max_yes = max(v["yes"] for v in stats.values())
+    yes_tied = [item_id for item_id, v in stats.items() if v["yes"] == max_yes]
+
+    if len(yes_tied) == 1:
+        return yes_tied[0]
+
+    # tie -> min NO among yes_tied
+    min_no = min(stats[item_id]["no"] for item_id in yes_tied)
+    no_tied = [item_id for item_id in yes_tied if stats[item_id]["no"] == min_no]
+
+    if len(no_tied) == 1:
+        return no_tied[0]
+
+    # tie -> deterministic random (seed=session_id)
+    rng = random.Random(str(s.id))
+    return rng.choice(sorted(no_tied, key=lambda x: str(x)))
+
+
+async def shuffle_and_complete(db: AsyncSession, *, session_id: uuid.UUID, user_id: uuid.UUID) -> TonightSession:
+    s = await _load_session_with_candidates(db, session_id)
+    await assert_user_in_group(db, s.group_id, user_id)
+    await _assert_session_active(s)
+
+    deck_item_ids = [c.watchlist_item_id for c in sorted(s.candidates, key=lambda x: x.position)]
+    if not deck_item_ids:
+        raise ValueError("Session has no candidates")
+
+    rng = random.Random(str(s.id) + ":shuffle")
+    winner = rng.choice(deck_item_ids)
+
+    now = datetime.now(timezone.utc)
+    s.status = "complete"
+    s.completed_at = now
+    s.result_watchlist_item_id = winner
+    return s
+
+
+async def get_session_state(db: AsyncSession, *, session_id: uuid.UUID, user_id: uuid.UUID) -> TonightSession:
+    s = await _load_session_with_candidates(db, session_id)
+    await assert_user_in_group(db, s.group_id, user_id)
+
+    # Auto resolve if expired and still active
+    if s.status == "active":
+        now = datetime.now(timezone.utc)
+        if s.ends_at <= now:
+            await resolve_if_expired(db, session_id=session_id)
+
+    # reload after possible mutation
+    return await _load_session_with_candidates(db, session_id)

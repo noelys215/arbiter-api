@@ -21,6 +21,8 @@ from app.api.routes.watchlist import router as watchlist_router
 
 from app.api.routes.sessions import router as sessions_router
 
+from app.api.routes.sessions import router as sessions_router
+
 
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
@@ -43,4 +45,5 @@ app.include_router(me_router)
 app.include_router(groups_router)
 app.include_router(tmdb_router)
 app.include_router(watchlist_router)
+app.include_router(sessions_router)
 app.include_router(sessions_router)
