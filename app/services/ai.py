@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import logging
+import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -9,72 +13,116 @@ from app.schemas.tonight_constraints import TonightConstraints
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+OPENAI_TIMEOUT_SECONDS = 8.0
+
+logger = logging.getLogger(__name__)
 
 
-class AIUnavailable(RuntimeError):
+class AIError(RuntimeError):
     pass
 
 
-def _has_openai() -> bool:
-    if settings.env == "test":
-        return False
-    return bool(getattr(settings, "openai_api_key", None))
+@dataclass
+class AIRerankResult:
+    ordered_ids: list[str]
+    top_id: str | None
+    why: str | None
 
 
-async def _openai_response(payload: dict[str, Any]) -> dict[str, Any]:
-    if not _has_openai():
-        raise AIUnavailable("OPENAI_API_KEY not set")
-
-    headers = {
+def _auth_headers() -> dict[str, str]:
+    if not settings.openai_api_key:
+        raise AIError("OPENAI_API_KEY missing")
+    return {
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(OPENAI_RESPONSES_URL, headers=headers, json=payload)
-        r.raise_for_status()
-        return r.json()
+
+def _extract_output_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    chunks.append(c.get("text", ""))
+    if chunks:
+        return "".join(chunks)
+    output_text = data.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+    return ""
 
 
-async def parse_constraints_with_ai(
-    *,
-    base: TonightConstraints,
-    text: str,
-) -> TonightConstraints:
-    """
-    Given UI constraints + freeform text, return refined constraints.
-    MUST NOT relax hard constraints in a way that violates schema defaults.
-    """
-    if not _has_openai():
-        # No AI available; treat as not parsed by AI, keep free_text
-        base.free_text = (text or "").strip()
-        base.parsed_by_ai = False
-        return base
+def _log_failure(correlation_id: str, message: str, exc: Exception | None = None) -> None:
+    if exc:
+        logger.warning("%s correlation_id=%s", message, correlation_id, exc_info=exc)
+    else:
+        logger.warning("%s correlation_id=%s", message, correlation_id)
 
-    prompt = f"""
-You are parsing movie-night preference text into a strict JSON schema.
 
-Schema (JSON):
-{{
-  "moods": [string],
-  "avoid": [string],
-  "max_runtime": integer|null,
-  "format": "movie"|"tv"|"any",
-  "energy": "low"|"med"|"high"|null,
-  "free_text": string,
-  "parsed_by_ai": boolean,
-  "ai_version": string|null
-}}
+async def _post_openai_json(payload: dict[str, Any]) -> dict[str, Any]:
+    correlation_id = str(uuid.uuid4())
+    try:
+        headers = _auth_headers()
+    except AIError as exc:
+        _log_failure(correlation_id, str(exc), exc)
+        raise
+
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT_SECONDS) as client:
+                resp = await client.post(OPENAI_RESPONSES_URL, headers=headers, json=payload)
+
+            status = resp.status_code
+            if status in (408, 429) or status >= 500:
+                raise AIError(f"OpenAI transient error {status}")
+            if status >= 400:
+                raise AIError(f"OpenAI request failed with status {status}")
+
+            data = resp.json()
+            output_text = _extract_output_text(data).strip()
+            if not output_text:
+                raise ValueError("Empty OpenAI output")
+
+            return json.loads(output_text)
+        except AIError as exc:
+            is_transient = "transient" in str(exc)
+            _log_failure(correlation_id, "OpenAI request failed", exc)
+            if attempt == 0 and is_transient:
+                continue
+            raise AIError(f"{exc} (correlation_id={correlation_id})") from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            _log_failure(correlation_id, "OpenAI returned invalid JSON", exc)
+            if attempt == 0:
+                continue
+            raise AIError(f"OpenAI returned invalid JSON (correlation_id={correlation_id})") from exc
+        except httpx.RequestError as exc:
+            _log_failure(correlation_id, "OpenAI request error", exc)
+            if attempt == 0:
+                continue
+            raise AIError(f"OpenAI request error (correlation_id={correlation_id})") from exc
+
+    raise AIError(f"OpenAI request failed (correlation_id={correlation_id})")
+
+
+async def ai_parse_constraints(*, baseline: TonightConstraints, text: str) -> TonightConstraints:
+    prompt = """
+You are parsing preference text into a strict JSON object.
+
+Return ONLY JSON with optional keys from this set:
+- "moods": [string]
+- "avoid": [string]
+- "max_runtime": integer|null
+- "format": "movie"|"tv"|"any"
+- "energy": "low"|"med"|"high"|null
 
 Rules:
-- Return ONLY valid JSON for that schema.
-- Keep existing UI constraints unless the text clearly tightens them.
-- Never invent runtime if not mentioned.
-- If user says "no TV" => format="movie". If user says "show" or "series" => format="tv".
-- free_text should preserve the raw text.
+- Never return keys outside the allowed set.
+- Do not invent runtime unless explicitly suggested.
+- Be concise; no extra text.
 """
 
-    # We prefer a deterministic output; temperature 0
     payload = {
         "model": settings.openai_model,
         "input": [
@@ -82,132 +130,105 @@ Rules:
             {
                 "role": "user",
                 "content": {
-                    "ui_constraints": base.model_dump(),
+                    "ui_constraints": baseline.model_dump(),
                     "text": text,
                 },
             },
         ],
-        "temperature": 0,
+        "temperature": 0.2,
     }
 
+    data = await _post_openai_json(payload)
+    if not isinstance(data, dict):
+        raise AIError("OpenAI returned unexpected JSON shape")
+
+    merged = baseline.model_dump()
+    for key in ("moods", "avoid", "max_runtime", "format", "energy"):
+        if key in data:
+            merged[key] = data[key]
+
+    merged["free_text"] = (text or "").strip()
+    merged["parsed_by_ai"] = True
+    merged["ai_version"] = settings.openai_model
+
     try:
-        data = await _openai_response(payload)
-    except (AIUnavailable, httpx.HTTPError):
-        base.free_text = (text or "").strip()
-        base.parsed_by_ai = False
-        return base
-
-    # Responses API output can vary; this is a best-effort extractor.
-    # In practice, you’ll likely standardize this later.
-    output_text = ""
-    try:
-        # common shape
-        for item in data.get("output", []):
-            for c in item.get("content", []):
-                if c.get("type") == "output_text":
-                    output_text += c.get("text", "")
-    except Exception:
-        output_text = ""
-
-    if not output_text.strip():
-        # fallback: no parse
-        base.free_text = (text or "").strip()
-        base.parsed_by_ai = False
-        return base
-
-    # Validate as canonical TonightConstraints
-    refined = TonightConstraints.model_validate_json(output_text)
-    refined.parsed_by_ai = True
-    refined.ai_version = settings.openai_model
-    return refined
+        return TonightConstraints.model_validate(merged)
+    except Exception as exc:
+        raise AIError("AI constraints failed validation") from exc
 
 
-async def rerank_candidates_with_ai(
-    *,
-    constraints: TonightConstraints,
-    candidates: list[dict[str, Any]],
-    final_n: int,
-) -> tuple[list[int], str | None]:
-    """
-    candidates: list of dicts with at least:
-    - "idx": stable integer index
-    - "title": string
-    - "media_type": "movie"|"tv"
-    - "year": int|None
-    returns: (ordered_idxs, optional why)
-    """
-    if not _has_openai():
-        # no AI: keep order
-        return [c["idx"] for c in candidates[:final_n]], None
+async def ai_rerank_candidates(
+    *, constraints: TonightConstraints, candidates: list[dict[str, Any]]
+) -> AIRerankResult:
+    if not candidates:
+        raise AIError("No candidates to rerank")
 
-    prompt = f"""
-You are selecting the best {final_n} items for a movie-night deck.
+    candidate_ids = [str(c.get("id")) for c in candidates if c.get("id") is not None]
+    if not candidate_ids:
+        raise AIError("Candidates missing ids")
 
-Constraints:
-{constraints.model_dump()}
+    prompt = """
+You are ranking watchlist items for a session.
 
-You will receive a list of candidates with an integer "idx". Return JSON ONLY:
-{{
-  "ordered_idxs": [int],   // length exactly {final_n}
-  "why": "short 1-2 sentence summary"
-}}
+Return ONLY JSON in this exact shape:
+{
+  "ordered_ids": ["<id>", "..."],
+  "top_id": "<id-or-null>",
+  "why": "short 1-2 sentences or null"
+}
 
 Rules:
-- You MUST return exactly {final_n} unique idx values from the candidate list.
-- Do not include anything besides JSON.
+- ordered_ids MUST contain only ids from the provided candidate list.
+- Do not include anything other than JSON.
 """
 
     payload = {
         "model": settings.openai_model,
         "input": [
             {"role": "system", "content": prompt.strip()},
-            {"role": "user", "content": {"candidates": candidates}},
+            {
+                "role": "user",
+                "content": {
+                    "constraints": constraints.model_dump(),
+                    "candidates": candidates,
+                },
+            },
         ],
-        "temperature": 0,
+        "temperature": 0.2,
     }
 
-    try:
-        data = await _openai_response(payload)
-    except (AIUnavailable, httpx.HTTPError):
-        return [c["idx"] for c in candidates[:final_n]], None
+    data = await _post_openai_json(payload)
+    if not isinstance(data, dict):
+        raise AIError("OpenAI returned unexpected JSON shape")
 
-    output_text = ""
-    try:
-        for item in data.get("output", []):
-            for c in item.get("content", []):
-                if c.get("type") == "output_text":
-                    output_text += c.get("text", "")
-    except Exception:
-        output_text = ""
+    ordered_ids = data.get("ordered_ids", [])
+    top_id = data.get("top_id")
+    why = data.get("why")
 
-    if not output_text.strip():
-        return [c["idx"] for c in candidates[:final_n]], None
+    if not isinstance(ordered_ids, list):
+        raise AIError("ordered_ids missing or invalid")
 
-    # Parse returned JSON safely via Pydantic-ish lightweight approach
-    import json
-
-    obj = json.loads(output_text)
-    ordered = obj.get("ordered_idxs", [])
-    why = obj.get("why")
-
-    # Guardrails
-    allowed = {c["idx"] for c in candidates}
-    ordered = [i for i in ordered if i in allowed]
-    dedup: list[int] = []
-    seen: set[int] = set()
-    for i in ordered:
-        if i in seen:
+    allowed = set(candidate_ids)
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for item_id in ordered_ids:
+        if not isinstance(item_id, str):
             continue
-        seen.add(i)
-        dedup.append(i)
+        if item_id not in allowed or item_id in seen:
+            continue
+        seen.add(item_id)
+        filtered.append(item_id)
 
-    if len(dedup) < final_n:
-        # fill deterministically from original order
-        for c in candidates:
-            if c["idx"] not in seen:
-                seen.add(c["idx"])
-                dedup.append(c["idx"])
-            if len(dedup) == final_n:
-                break
+    min_valid = min(3, len(candidate_ids))
+    if len(filtered) < min_valid or len(filtered) < (len(candidate_ids) // 2 + 1):
+        raise AIError("AI rerank returned too few valid ids")
 
-    return dedup[:final_n], why
+    if not isinstance(top_id, str) or top_id not in allowed:
+        top_id = None
+
+    if not isinstance(why, str):
+        why = None
+    elif len(why) > 280:
+        why = why[:280]
+
+    return AIRerankResult(ordered_ids=filtered, top_id=top_id, why=why)

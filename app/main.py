@@ -3,6 +3,7 @@ import app.models  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_mcp import FastApiMCP
 
 from app.core.config import settings
 from app.api.routes.health import router as health_router
@@ -46,4 +47,6 @@ app.include_router(groups_router)
 app.include_router(tmdb_router)
 app.include_router(watchlist_router)
 app.include_router(sessions_router)
-app.include_router(sessions_router)
+
+mcp = FastApiMCP(app)
+mcp.mount_http()

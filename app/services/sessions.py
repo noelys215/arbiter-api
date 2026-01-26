@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import uuid
@@ -16,7 +17,7 @@ from app.models.tonight_session_candidate import TonightSessionCandidate
 from app.models.tonight_vote import TonightVote
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.tonight_constraints import TonightConstraints
-from app.services.ai import parse_constraints_with_ai, rerank_candidates_with_ai
+from app.services.ai import AIError, ai_parse_constraints, ai_rerank_candidates
 from app.services.watchlist import assert_user_in_group
 
 
@@ -26,10 +27,9 @@ def _canonicalize_constraints(payload: dict) -> TonightConstraints:
     return c
 
 
-def _constraints_hash(c: TonightConstraints) -> int:
-    # Stable seed for deterministic ordering (non-AI path)
-    s = json.dumps(c.model_dump(), sort_keys=True)
-    return abs(hash(s)) % (2**31)
+def _stable_seed(value: str) -> int:
+    digest = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big")
 
 
 def _apply_hard_filters(items: list[WatchlistItem], c: TonightConstraints) -> list[WatchlistItem]:
@@ -80,15 +80,17 @@ async def create_tonight_session(
     base = _canonicalize_constraints(constraints_payload)
 
     # 3) if text present, call AI parse (optional)
-    ai_used = False
     refined = base
     if text and text.strip():
-        refined = await parse_constraints_with_ai(base=base, text=text.strip())
-        # parsed_by_ai is set in ai.py only if AI ran
-        ai_used = bool(refined.parsed_by_ai)
-
-    # Always keep free_text consistent:
-    refined.free_text = (text or refined.free_text or "").strip()
+        try:
+            refined = await ai_parse_constraints(baseline=base, text=text.strip())
+        except AIError:
+            refined = base
+            refined.free_text = text.strip()
+            refined.parsed_by_ai = False
+            refined.ai_version = None
+    else:
+        refined.free_text = (text or "").strip()
 
     # 4) eligible pool from watchlist:
     #    status=watchlist, snoozed_until <= now
@@ -115,63 +117,79 @@ async def create_tonight_session(
 
     ends_at = now + timedelta(seconds=duration_seconds)
 
+    # 6) pick preliminary set (top 30) using deterministic shuffle
+    seed_source = f"{group_id}:{now.date().isoformat()}:{json.dumps(refined.model_dump(), sort_keys=True)}"
+    seed = _stable_seed(seed_source)
+    prelim = _deterministic_shuffle(filtered, seed=seed)[:30]
+
+    # 7) AI rerank on preliminary set to pick best N for deck
+    final_n = min(candidate_count, len(prelim))
+    candidates_payload: list[dict[str, Any]] = []
+    for it in prelim:
+        t = it.title
+        candidates_payload.append(
+            {
+                "id": str(it.id),
+                "title": t.name,
+                "release_year": t.release_year,
+                "media_type": t.media_type,
+                "runtime_minutes": t.runtime_minutes,
+                "overview": t.overview,
+            }
+        )
+
+    final_order: list[WatchlistItem] = list(prelim[:final_n])
+    ai_used = False
+    ai_why: str | None = None
+
+    if final_n > 1:
+        try:
+            rerank = await ai_rerank_candidates(constraints=refined, candidates=candidates_payload)
+            by_id = {str(it.id): it for it in prelim}
+            valid_ids = [item_id for item_id in rerank.ordered_ids if item_id in by_id]
+            min_valid = min(3, final_n)
+            if len(valid_ids) < min_valid or len(valid_ids) < (final_n // 2 + 1):
+                raise AIError("AI rerank returned invalid ids")
+            seen: set[uuid.UUID] = set()
+            ordered: list[WatchlistItem] = []
+            for item_id in valid_ids:
+                it = by_id.get(item_id)
+                if not it or it.id in seen:
+                    continue
+                seen.add(it.id)
+                ordered.append(it)
+                if len(ordered) == final_n:
+                    break
+            if len(ordered) < final_n:
+                for it in prelim:
+                    if it.id in seen:
+                        continue
+                    seen.add(it.id)
+                    ordered.append(it)
+                    if len(ordered) == final_n:
+                        break
+            final_order = ordered
+            ai_used = True
+            ai_why = rerank.why
+        except AIError:
+            pass
+
     sess = TonightSession(
         group_id=group_id,
         created_by_user_id=user_id,
         constraints=refined.model_dump(),
         ends_at=ends_at,
         duration_seconds=duration_seconds,
-        candidate_count=candidate_count,
+        candidate_count=final_n,
         ai_used=ai_used,
+        ai_why=ai_why,
     )
     db.add(sess)
     await db.flush()  # get session id
 
-    # 6) pick preliminary set (top 30) using deterministic shuffle
-    seed = _constraints_hash(refined) ^ abs(hash(str(group_id))) % (2**31)
-    prelim = _deterministic_shuffle(filtered, seed=seed)[:30]
-
-    # 7) AI rerank on preliminary set to pick best N for deck
-    final_n = min(candidate_count, len(prelim))
-    candidates_payload: list[dict[str, Any]] = []
-    for idx, it in enumerate(prelim):
-        t = it.title
-        candidates_payload.append(
-            {
-                "idx": idx,
-                "watchlist_item_id": str(it.id),
-                "title": t.name,
-                "media_type": t.media_type,
-                "year": t.release_year,
-                "moods": refined.moods,
-                "avoid": refined.avoid,
-                "energy": refined.energy,
-                "max_runtime": refined.max_runtime,
-                "format": refined.format,
-            }
-        )
-
-    ordered_idxs, why = await rerank_candidates_with_ai(
-        constraints=refined,
-        candidates=candidates_payload,
-        final_n=final_n,
-    )
-
-    # If AI returned something (or fallback did), we consider rerank part of AI usage only if parse used AI.
-    # You can change this later if you want ai_used to mean "any AI used".
-    if why:
-        sess.ai_why = why
-
     # 8) freeze deck in session_candidates
     out_candidates: list[TonightSessionCandidate] = []
-    used_watchlist_ids: set[uuid.UUID] = set()
-
-    for pos, idx in enumerate(ordered_idxs):
-        it = prelim[idx]
-        if it.id in used_watchlist_ids:
-            continue
-        used_watchlist_ids.add(it.id)
-
+    for pos, it in enumerate(final_order):
         c = TonightSessionCandidate(
             session_id=sess.id,
             watchlist_item_id=it.id,

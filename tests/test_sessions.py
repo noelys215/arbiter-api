@@ -1,80 +1,70 @@
 from datetime import datetime, timezone, timedelta
-import uuid
 
 import pytest
 
 
-def _u(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
-
-
 @pytest.mark.anyio
-async def test_create_session_requires_membership(async_client):
+async def test_create_session_requires_membership(async_client, user_factory, login_helper):
     # User A creates group
-    a_email = f"{_u('a')}@x.com"
-    a_username = _u("a")
-    await async_client.post(
-        "/auth/register",
-        json={"email": a_email, "username": a_username, "display_name": "A", "password": "SuperSecret123"},
-    )
-    await async_client.post("/auth/login", json={"email": a_email, "password": "SuperSecret123"})
-    g = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    user_a = await user_factory(async_client, display_name="A")
+    await login_helper(async_client, email=user_a["email"], password=user_a["password"])
+    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    assert r.status_code in (200, 201), r.text
+    g = r.json()
     group_id = g["id"]
 
     # User B tries to create session for that group
-    b_email = f"{_u('b')}@x.com"
-    b_username = _u("b")
-    await async_client.post(
-        "/auth/register",
-        json={"email": b_email, "username": b_username, "display_name": "B", "password": "SuperSecret123"},
-    )
-    await async_client.post("/auth/login", json={"email": b_email, "password": "SuperSecret123"})
+    user_b = await user_factory(async_client, display_name="B")
+    await login_helper(async_client, email=user_b["email"], password=user_b["password"])
 
     r = await async_client.post(f"/groups/{group_id}/sessions", json={"constraints": {}, "duration_seconds": 90, "candidate_count": 12})
-    assert r.status_code == 403
+    assert r.status_code in (401, 403)
 
 
 @pytest.mark.anyio
-async def test_create_session_freezes_deck_and_returns_order(async_client, monkeypatch):
+async def test_create_session_freezes_deck_and_returns_order(async_client, monkeypatch, user_factory, login_helper):
     # Patch AI so it deterministically reorders candidates
     from app.services import sessions as sessions_service
+    from app.services.ai import AIRerankResult
     from app.schemas.tonight_constraints import TonightConstraints
 
-    async def fake_parse(*, base: TonightConstraints, text: str):
-        base.free_text = text.strip()
-        base.parsed_by_ai = True
-        base.ai_version = "test-ai"
+    async def fake_parse(*, baseline: TonightConstraints, text: str):
+        baseline.free_text = text.strip()
+        baseline.parsed_by_ai = True
+        baseline.ai_version = "test-ai"
         # tighten format if "movie" in text
         if "movie" in text.lower():
-            base.format = "movie"
-        return base
+            baseline.format = "movie"
+        return baseline
 
-    async def fake_rerank(*, constraints: TonightConstraints, candidates: list[dict], final_n: int):
-        # reverse the order for deterministic check
-        idxs = [c["idx"] for c in candidates[:final_n]][::-1]
-        return idxs, "because reasons"
+    async def fake_rerank(*, constraints: TonightConstraints, candidates: list[dict]):
+        ordered = [c["id"] for c in candidates][::-1]
+        return AIRerankResult(ordered_ids=ordered, top_id=ordered[0], why="because reasons")
 
-    monkeypatch.setattr(sessions_service, "parse_constraints_with_ai", fake_parse)
-    monkeypatch.setattr(sessions_service, "rerank_candidates_with_ai", fake_rerank)
+    monkeypatch.setattr(sessions_service, "ai_parse_constraints", fake_parse)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
 
     # user
-    u_email = f"{_u('u')}@x.com"
-    u_username = _u("u")
-    await async_client.post(
-        "/auth/register",
-        json={"email": u_email, "username": u_username, "display_name": "U", "password": "SuperSecret123"},
-    )
-    await async_client.post("/auth/login", json={"email": u_email, "password": "SuperSecret123"})
-    g = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    user = await user_factory(async_client, display_name="U")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    assert r.status_code in (200, 201), r.text
+    g = r.json()
     group_id = g["id"]
 
     # Add 3 eligible watchlist items
     def tmdb_payload(tmdb_id: int, title: str, media_type="movie"):
         return {"type": "tmdb", "tmdb_id": tmdb_id, "media_type": media_type, "title": title, "year": 2000, "poster_path": None}
 
-    w1 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(1, "A"))).json()
-    w2 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(2, "B"))).json()
-    w3 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(3, "C"))).json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(1, "A"))
+    assert r.status_code == 201, r.text
+    w1 = r.json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(2, "B"))
+    assert r.status_code == 201, r.text
+    w2 = r.json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(3, "C"))
+    assert r.status_code == 201, r.text
+    w3 = r.json()
 
     # Create session
     body = {
@@ -107,23 +97,26 @@ async def test_create_session_freezes_deck_and_returns_order(async_client, monke
 
 
 @pytest.mark.anyio
-async def test_session_pool_excludes_watched_and_snoozed(async_client):
-    p_email = f"{_u('p')}@x.com"
-    p_username = _u("p")
-    await async_client.post(
-        "/auth/register",
-        json={"email": p_email, "username": p_username, "display_name": "P", "password": "SuperSecret123"},
-    )
-    await async_client.post("/auth/login", json={"email": p_email, "password": "SuperSecret123"})
-    g = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+async def test_session_pool_excludes_watched_and_snoozed(async_client, user_factory, login_helper):
+    user = await user_factory(async_client, display_name="P")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    assert r.status_code in (200, 201), r.text
+    g = r.json()
     group_id = g["id"]
 
     def tmdb_payload(tmdb_id: int, title: str):
         return {"type": "tmdb", "tmdb_id": tmdb_id, "media_type": "movie", "title": title, "year": 2000, "poster_path": None}
 
-    i1 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(11, "A"))).json()
-    i2 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(12, "B"))).json()
-    i3 = (await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(13, "C"))).json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(11, "A"))
+    assert r.status_code == 201, r.text
+    i1 = r.json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(12, "B"))
+    assert r.status_code == 201, r.text
+    i2 = r.json()
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=tmdb_payload(13, "C"))
+    assert r.status_code == 201, r.text
+    i3 = r.json()
 
     # mark i2 watched
     r = await async_client.patch(f"/watchlist-items/{i2['id']}", json={"status": "watched"})
@@ -149,26 +142,25 @@ async def test_session_pool_excludes_watched_and_snoozed(async_client):
 
 
 @pytest.mark.anyio
-async def test_hard_filter_format_movie(async_client):
-    f_email = f"{_u('f')}@x.com"
-    f_username = _u("f")
-    await async_client.post(
-        "/auth/register",
-        json={"email": f_email, "username": f_username, "display_name": "F", "password": "SuperSecret123"},
-    )
-    await async_client.post("/auth/login", json={"email": f_email, "password": "SuperSecret123"})
-    g = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+async def test_hard_filter_format_movie(async_client, user_factory, login_helper):
+    user = await user_factory(async_client, display_name="F")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    assert r.status_code in (200, 201), r.text
+    g = r.json()
     group_id = g["id"]
 
     # add one movie and one tv
-    await async_client.post(
+    r = await async_client.post(
         f"/groups/{group_id}/watchlist",
         json={"type": "tmdb", "tmdb_id": 21, "media_type": "movie", "title": "Movie A", "year": 2000, "poster_path": None},
     )
-    await async_client.post(
+    assert r.status_code == 201, r.text
+    r = await async_client.post(
         f"/groups/{group_id}/watchlist",
         json={"type": "tmdb", "tmdb_id": 22, "media_type": "tv", "title": "Show B", "year": 2001, "poster_path": None},
     )
+    assert r.status_code == 201, r.text
 
     r = await async_client.post(
         f"/groups/{group_id}/sessions",

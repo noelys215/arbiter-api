@@ -1,5 +1,7 @@
 import os
 import asyncio
+import uuid
+from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -77,17 +79,91 @@ async def async_client(client):
 
 # --- Small helpers for your spine tests ---
 
-async def register_user(client: AsyncClient, *, email: str, username: str, display_name: str, password: str):
-    return await client.post(
-        "/auth/register",
-        json={
+def _unique(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+@pytest.fixture
+def unique_str():
+    return _unique
+
+
+@pytest.fixture
+def client_factory():
+    @asynccontextmanager
+    async def _factory():
+        transport = ASGITransport(app=fastapi_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+    return _factory
+
+
+@pytest.fixture
+def user_factory(unique_str):
+    async def _create(
+        client: AsyncClient,
+        *,
+        email: str | None = None,
+        username: str | None = None,
+        display_name: str | None = None,
+        password: str = "SuperSecret123",
+    ):
+        email = email or f"{unique_str('user')}@example.com"
+        username = username or unique_str("user")
+        display_name = display_name or username
+        r = await client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "username": username,
+                "display_name": display_name,
+                "password": password,
+            },
+        )
+        assert r.status_code in (200, 201), r.text
+        data = r.json()
+        assert "id" in data
+        return {
+            "id": data["id"],
             "email": email,
             "username": username,
             "display_name": display_name,
             "password": password,
-        },
-    )
+        }
+
+    return _create
 
 
-async def login_user(client: AsyncClient, *, email: str, password: str):
-    return await client.post("/auth/login", json={"email": email, "password": password})
+@pytest.fixture
+def login_helper():
+    async def _login(client: AsyncClient, *, email: str, password: str):
+        client.cookies.clear()
+        r = await client.post("/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200, r.text
+        token = client.cookies.get("access_token")
+        assert token, "Login did not set access_token cookie"
+        return token
+
+    return _login
+
+
+@pytest.fixture
+def authed_user(user_factory, login_helper):
+    async def _create(client: AsyncClient, **kwargs):
+        user = await user_factory(client, **kwargs)
+        token = await login_helper(client, email=user["email"], password=user["password"])
+        user["token"] = token
+        return user
+
+    return _create
+
+
+@pytest.fixture
+def set_auth_cookie():
+    def _set(client: AsyncClient, token: str | None):
+        client.cookies.clear()
+        if token:
+            client.cookies.set("access_token", token)
+
+    return _set

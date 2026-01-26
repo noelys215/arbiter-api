@@ -4,6 +4,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.anyio
+
 
 def _u(prefix: str) -> str:
     """Unique string helper for emails/usernames."""
@@ -90,7 +92,6 @@ async def accept_group_invite(client, *, token_user: str, code: str) -> None:
     assert r.json().get("ok") is True
 
 
-@pytest.mark.asyncio
 async def test_groups_full_flow_owner_member_invite_accept(client):
     password = "SuperSecret123"
 
@@ -164,7 +165,6 @@ async def test_groups_full_flow_owner_member_invite_accept(client):
     assert c_id in member_ids2
 
 
-@pytest.mark.asyncio
 async def test_group_detail_requires_membership(client):
     password = "SuperSecret123"
 
@@ -196,7 +196,6 @@ async def test_group_detail_requires_membership(client):
     assert r.status_code in (401, 403, 404), r.text
 
 
-@pytest.mark.asyncio
 async def test_only_owner_can_generate_group_invite(client):
     password = "SuperSecret123"
 
@@ -223,7 +222,6 @@ async def test_only_owner_can_generate_group_invite(client):
     assert r.status_code in (401, 403), r.text
 
 
-@pytest.mark.asyncio
 async def test_accept_group_invite_invalid_code_returns_400(client):
     password = "SuperSecret123"
 
