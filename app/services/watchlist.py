@@ -111,6 +111,7 @@ async def add_watchlist_item_tmdb(
     )
 
     item = WatchlistItem(group_id=group_id, title_id=t.id)
+    item.added_by_user_id = user_id
     db.add(item)
 
     try:
@@ -129,13 +130,16 @@ async def add_watchlist_item_tmdb(
 
         q_item = (
             select(WatchlistItem)
-            .options(selectinload(WatchlistItem.title))
+            .options(
+                selectinload(WatchlistItem.title),
+                selectinload(WatchlistItem.added_by_user),
+            )
             .where(WatchlistItem.group_id == group_id, WatchlistItem.title_id == t2.id)
         )
         existing = (await db.execute(q_item)).scalar_one()
         return existing, True
 
-    await db.refresh(item, attribute_names=["title"])
+    await db.refresh(item, attribute_names=["title", "added_by_user"])
     already_exists = False
     return item, already_exists
 
@@ -162,9 +166,10 @@ async def add_watchlist_item_manual(
         overview=overview,
     )
     item = WatchlistItem(group_id=group_id, title_id=t.id)
+    item.added_by_user_id = user_id
     db.add(item)
     await db.flush()
-    await db.refresh(item, attribute_names=["title"])
+    await db.refresh(item, attribute_names=["title", "added_by_user"])
     return item
 
 
@@ -180,7 +185,10 @@ async def list_watchlist(
 
     q = (
         select(WatchlistItem)
-        .options(selectinload(WatchlistItem.title))
+        .options(
+            selectinload(WatchlistItem.title),
+            selectinload(WatchlistItem.added_by_user),
+        )
         .where(WatchlistItem.group_id == group_id)
         .order_by(WatchlistItem.created_at.desc())
     )

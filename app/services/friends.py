@@ -105,3 +105,22 @@ async def list_friends(db: AsyncSession, current_user_id):
 
     rows = (await db.execute(q)).scalars().all()
     return rows
+
+
+async def unfriend(db: AsyncSession, current_user_id, other_user_id) -> None:
+    if str(current_user_id) == str(other_user_id):
+        raise ValueError("cannot_unfriend_self")
+
+    low, high = _pair(str(current_user_id), str(other_user_id))
+    existing = (
+        await db.execute(
+            select(Friendship).where(
+                and_(Friendship.user_low_id == low, Friendship.user_high_id == high)
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not existing:
+        raise ValueError("not_found")
+
+    await db.delete(existing)

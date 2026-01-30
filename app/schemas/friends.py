@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 from datetime import datetime
+from uuid import UUID
 
 
 class FriendInviteCreateResponse(BaseModel):
@@ -23,3 +24,12 @@ class FriendListItem(BaseModel):
     username: str
     display_name: str
     avatar_url: str | None = None
+
+
+class UnfriendRequest(BaseModel):
+    user_id: UUID
+
+
+class UnfriendResponse(BaseModel):
+    ok: bool
+    removed: bool

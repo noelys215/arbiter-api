@@ -159,6 +159,7 @@ async def create_group_invite(db: AsyncSession, group_id: UUID, creator_id: UUID
 
 async def accept_group_invite(db: AsyncSession, user_id: UUID, code: str) -> None:
     now = _now_utc()
+    code = code.strip()
 
     try:
         invite = (
@@ -195,3 +196,75 @@ async def accept_group_invite(db: AsyncSession, user_id: UUID, code: str) -> Non
     except Exception:
         await db.rollback()
         raise
+
+
+async def leave_group(db: AsyncSession, group_id: UUID, user_id: UUID) -> None:
+    await _ensure_membership(db, group_id, user_id)
+
+    g = (await db.execute(sa.select(Group).where(Group.id == group_id))).scalar_one()
+    if g.owner_id == user_id:
+        raise ValueError("owner_cannot_leave")
+
+    membership = (
+        await db.execute(
+            sa.select(GroupMembership).where(
+                GroupMembership.group_id == group_id,
+                GroupMembership.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if membership is None:
+        raise PermissionError("Not a member of this group")
+
+    await db.delete(membership)
+
+
+async def delete_group(db: AsyncSession, group_id: UUID, user_id: UUID) -> None:
+    g = (await db.execute(sa.select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    if g is None:
+        raise ValueError("not_found")
+    if g.owner_id != user_id:
+        raise PermissionError("Only the group owner can delete the group")
+
+    await db.delete(g)
+
+
+async def add_group_members(
+    db: AsyncSession,
+    *,
+    group_id: UUID,
+    owner_id: UUID,
+    member_user_ids: list[UUID],
+) -> tuple[list[UUID], list[UUID]]:
+    g = (await db.execute(sa.select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    if g is None:
+        raise ValueError("not_found")
+    if g.owner_id != owner_id:
+        raise PermissionError("Only the group owner can add members")
+
+    # De-dupe, remove owner, and remove existing members
+    seen: set[UUID] = set()
+    candidates: list[UUID] = []
+    for uid in member_user_ids:
+        if uid == owner_id or uid in seen:
+            continue
+        seen.add(uid)
+        candidates.append(uid)
+
+    existing_rows = await db.execute(
+        sa.select(GroupMembership.user_id).where(GroupMembership.group_id == group_id)
+    )
+    existing = {row[0] for row in existing_rows.all()}
+
+    to_add = [uid for uid in candidates if uid not in existing]
+    skipped = [uid for uid in candidates if uid in existing]
+
+    # Validate friendship and add memberships
+    for uid in to_add:
+        ok = await _is_friend(db, owner_id, uid)
+        if not ok:
+            raise ValueError(f"User {uid} is not an accepted friend")
+        db.add(GroupMembership(group_id=group_id, user_id=uid))
+
+    return to_add, skipped

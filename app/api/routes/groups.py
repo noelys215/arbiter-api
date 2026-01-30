@@ -12,6 +12,10 @@ from app.schemas.groups import (
     GroupDetailResponse,
     GroupInviteResponse,
     AcceptGroupInviteRequest,
+    LeaveGroupResponse,
+    DeleteGroupResponse,
+    AddGroupMembersRequest,
+    AddGroupMembersResponse,
 )
 from app.services.groups import (
     create_group,
@@ -19,6 +23,9 @@ from app.services.groups import (
     get_group_detail,
     create_group_invite,
     accept_group_invite,
+    leave_group,
+    delete_group,
+    add_group_members,
 )
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -110,8 +117,78 @@ async def accept_group_invite_route(
         return {"ok": True}
     except ValueError as e:
         msg = str(e).lower()
+        if "invalid" in msg:
+            raise HTTPException(status_code=404, detail=str(e))
         if "expired" in msg:
             raise HTTPException(status_code=410, detail=str(e))
         if "used" in msg:
             raise HTTPException(status_code=409, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{group_id}/leave", response_model=LeaveGroupResponse, status_code=200)
+async def leave_group_route(
+    group_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        await leave_group(db, group_id, user.id)
+        await db.commit()
+        return LeaveGroupResponse(ok=True)
+    except PermissionError as e:
+        await db.rollback()
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        await db.rollback()
+        msg = str(e).lower()
+        if "owner_cannot_leave" in msg:
+            raise HTTPException(status_code=400, detail="Group owner cannot leave their own group")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{group_id}", response_model=DeleteGroupResponse, status_code=200)
+async def delete_group_route(
+    group_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        await delete_group(db, group_id, user.id)
+        await db.commit()
+        return DeleteGroupResponse(ok=True)
+    except PermissionError as e:
+        await db.rollback()
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        await db.rollback()
+        if str(e) == "not_found":
+            raise HTTPException(status_code=404, detail="Group not found")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{group_id}/members", response_model=AddGroupMembersResponse, status_code=200)
+async def add_group_members_route(
+    group_id: UUID,
+    payload: AddGroupMembersRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        added, skipped = await add_group_members(
+            db,
+            group_id=group_id,
+            owner_id=user.id,
+            member_user_ids=payload.member_user_ids,
+        )
+        await db.commit()
+        return AddGroupMembersResponse(ok=True, added_user_ids=added, skipped_user_ids=skipped)
+    except PermissionError as e:
+        await db.rollback()
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        await db.rollback()
+        if str(e) == "not_found":
+            raise HTTPException(status_code=404, detail="Group not found")
+        raise HTTPException(status_code=400, detail=str(e))
+

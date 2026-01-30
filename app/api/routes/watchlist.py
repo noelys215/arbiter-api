@@ -20,9 +20,21 @@ router = APIRouter(tags=["watchlist"])
 
 def to_out(item, already_exists: bool = False) -> WatchlistItemOut:
     t = item.title
+    u = item.added_by_user
     return WatchlistItemOut(
         id=item.id,
         group_id=item.group_id,
+        added_by_user=(
+            {
+                "id": u.id,
+                "email": u.email,
+                "username": u.username,
+                "display_name": u.display_name,
+                "avatar_url": u.avatar_url,
+            }
+            if u
+            else None
+        ),
         status=item.status,
         snoozed_until=item.snoozed_until,
         created_at=item.created_at,

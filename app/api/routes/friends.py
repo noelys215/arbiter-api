@@ -10,8 +10,10 @@ from app.schemas.friends import (
     FriendAcceptRequest,
     FriendAcceptResponse,
     FriendListItem,
+    UnfriendRequest,
+    UnfriendResponse,
 )
-from app.services.friends import create_friend_invite, accept_friend_invite, list_friends
+from app.services.friends import create_friend_invite, accept_friend_invite, list_friends, unfriend
 
 router = APIRouter(prefix="/friends", tags=["friends"])
 
@@ -65,3 +67,24 @@ async def get_friends(
         )
         for f in friends
     ]
+
+
+@router.post("/unfriend", response_model=UnfriendResponse, status_code=200)
+async def unfriend_route(
+    payload: UnfriendRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        await unfriend(db, user.id, payload.user_id)
+        await db.commit()
+        return UnfriendResponse(ok=True, removed=True)
+    except ValueError as e:
+        await db.rollback()
+        code = str(e)
+        mapping = {
+            "not_found": (404, "Friendship not found"),
+            "cannot_unfriend_self": (400, "You cannot unfriend yourself"),
+        }
+        status, msg = mapping.get(code, (400, "Could not unfriend user"))
+        raise HTTPException(status_code=status, detail=msg)

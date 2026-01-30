@@ -17,6 +17,12 @@ class WatchlistItem(Base):
 
     group_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), sa.ForeignKey("groups.id"), nullable=False, index=True)
     title_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), sa.ForeignKey("titles.id"), nullable=False, index=True)
+    added_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
 
     # "watchlist" | "watched"
     status: Mapped[str] = mapped_column(sa.String(20), nullable=False, server_default="watchlist")
@@ -25,6 +31,7 @@ class WatchlistItem(Base):
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False)
 
     title = relationship("Title", back_populates="watchlist_items")
+    added_by_user = relationship("User", lazy="joined")
 
     __table_args__ = (
         sa.CheckConstraint("status IN ('watchlist','watched')", name="ck_watchlist_items_status"),

@@ -42,9 +42,18 @@ class AddWatchlistManual(BaseModel):
 AddWatchlistRequest = AddWatchlistTMDB | AddWatchlistManual
 
 
+class WatchlistAddedBy(BaseModel):
+    id: UUID
+    email: str
+    username: str
+    display_name: str
+    avatar_url: str | None = None
+
+
 class WatchlistItemOut(BaseModel):
     id: UUID
     group_id: UUID
+    added_by_user: WatchlistAddedBy | None
     status: str
     snoozed_until: datetime | None
     created_at: datetime

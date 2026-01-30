@@ -44,3 +44,21 @@ class GroupInviteResponse(BaseModel):
 
 class AcceptGroupInviteRequest(BaseModel):
     code: str = Field(min_length=6, max_length=32)
+
+
+class LeaveGroupResponse(BaseModel):
+    ok: bool
+
+
+class DeleteGroupResponse(BaseModel):
+    ok: bool
+
+
+class AddGroupMembersRequest(BaseModel):
+    member_user_ids: List[UUID] = Field(default_factory=list)
+
+
+class AddGroupMembersResponse(BaseModel):
+    ok: bool
+    added_user_ids: List[UUID]
+    skipped_user_ids: List[UUID]
