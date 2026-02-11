@@ -4,6 +4,10 @@ import app.models  # noqa: F401
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_mcp import FastApiMCP
+try:
+    from starlette.middleware.sessions import SessionMiddleware
+except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
+    SessionMiddleware = None
 
 from app.core.config import settings
 from app.api.routes.health import router as health_router
@@ -22,14 +26,20 @@ from app.api.routes.watchlist import router as watchlist_router
 
 from app.api.routes.sessions import router as sessions_router
 
-from app.api.routes.sessions import router as sessions_router
-
 
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
 @app.exception_handler(Exception)
 async def debug_exception_handler(request: Request, exc: Exception):
     return PlainTextResponse("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), status_code=500)
+
+if SessionMiddleware is not None:
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=(settings.oauth_session_secret or settings.jwt_secret),
+        same_site="lax",
+        https_only=settings.env not in {"local", "test"},
+    )
 
 app.add_middleware(
     CORSMiddleware,

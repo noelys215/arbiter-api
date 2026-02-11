@@ -20,3 +20,11 @@ async def test_me_requires_auth(client):
     r = await client.get("/me")
     # Depending on your auth logic, could be 401 or 403
     assert r.status_code in (401, 403)
+
+
+async def test_social_oauth_endpoints_require_provider_config(client):
+    google = await client.get("/auth/google/login")
+    facebook = await client.get("/auth/facebook/login")
+
+    assert google.status_code == 503
+    assert facebook.status_code == 503

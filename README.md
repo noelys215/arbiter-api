@@ -4,12 +4,17 @@ FastAPI backend for a collaborative "what should we watch" experience. Users can
 
 ## Quick start
 
-1) Start Postgres
+1) Install dependencies (includes OAuth support)
+```bash
+pip install authlib itsdangerous
+```
+
+2) Start Postgres
 ```bash
 docker compose up -d
 ```
 
-2) Create `.env` (example)
+3) Create `.env` (example)
 ```bash
 ENV=local
 DATABASE_URL=postgresql+asyncpg://watchpicker:watchpicker@localhost:5432/watchpicker
@@ -20,14 +25,23 @@ CORS_ORIGINS=http://localhost:5173
 TMDB_TOKEN=your_tmdb_bearer_token
 OPENAI_API_KEY=your_openai_key
 OPENAI_MODEL=gpt-5-mini
+OAUTH_GOOGLE_CLIENT_ID=
+OAUTH_GOOGLE_CLIENT_SECRET=
+OAUTH_FACEBOOK_CLIENT_ID=
+OAUTH_FACEBOOK_CLIENT_SECRET=
+OAUTH_GOOGLE_CALLBACK_URL=http://localhost:8000/auth/google/callback
+OAUTH_FACEBOOK_CALLBACK_URL=http://localhost:8000/auth/facebook/callback
+OAUTH_FRONTEND_SUCCESS_URL=http://localhost:5173/app
+OAUTH_FRONTEND_FAILURE_URL=http://localhost:5173/login
+OAUTH_SESSION_SECRET=
 ```
 
-3) Run migrations
+4) Run migrations
 ```bash
 alembic upgrade head
 ```
 
-4) Run the API
+5) Run the API
 ```bash
 make api
 ```
@@ -89,6 +103,10 @@ The app uses cookie-based auth. `POST /auth/login` sets an `access_token` cookie
   - Creates a user. Rejects duplicate email/username.
 - `POST /auth/login`
   - Sets a signed JWT as `access_token` cookie.
+- `GET /auth/google/login` and `GET /auth/facebook/login`
+  - Starts OAuth redirect flow for social sign-in.
+- `GET /auth/google/callback` and `GET /auth/facebook/callback`
+  - Handles provider callback, creates/links a user, sets `access_token` cookie, redirects to frontend.
 - `POST /auth/logout`
   - Clears cookie.
 - `GET /me`
@@ -200,6 +218,15 @@ Common optional vars:
 - `CORS_ORIGINS` (comma-separated)
 - `OPENAI_API_KEY` (optional)
 - `OPENAI_MODEL` (default `gpt-5-mini`)
+- `OAUTH_GOOGLE_CLIENT_ID`
+- `OAUTH_GOOGLE_CLIENT_SECRET`
+- `OAUTH_FACEBOOK_CLIENT_ID`
+- `OAUTH_FACEBOOK_CLIENT_SECRET`
+- `OAUTH_GOOGLE_CALLBACK_URL` (default `http://localhost:8000/auth/google/callback`)
+- `OAUTH_FACEBOOK_CALLBACK_URL` (default `http://localhost:8000/auth/facebook/callback`)
+- `OAUTH_FRONTEND_SUCCESS_URL` (default `http://localhost:5173/app`)
+- `OAUTH_FRONTEND_FAILURE_URL` (default `http://localhost:5173/login`)
+- `OAUTH_SESSION_SECRET` (falls back to `JWT_SECRET` if unset)
 
 ## Running tests
 
