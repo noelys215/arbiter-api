@@ -81,3 +81,87 @@ async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:
 
     _cache_set(key, out)
     return out
+
+
+def _normalize_term(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+async def fetch_tmdb_title_taxonomy(
+    *,
+    tmdb_id: int,
+    media_type: str,
+) -> tuple[set[str], set[str]]:
+    if media_type not in {"movie", "tv"}:
+        return set(), set()
+    if settings.env == "test":
+        return set(), set()
+
+    key = f"taxonomy:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if cached is not None:
+        genres = {
+            _normalize_term(v)
+            for v in cached.get("genres", [])
+            if isinstance(v, str) and v.strip()
+        }
+        keywords = {
+            _normalize_term(v)
+            for v in cached.get("keywords", [])
+            if isinstance(v, str) and v.strip()
+        }
+        return genres, keywords
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+
+    path = f"/{media_type}/{tmdb_id}"
+    params = {"append_to_response": "keywords"}
+
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(path, params=params, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return set(), set()
+
+    genre_names = [
+        g.get("name")
+        for g in data.get("genres", [])
+        if isinstance(g, dict)
+    ]
+
+    keywords_node = data.get("keywords", {})
+    keyword_rows: list[dict[str, Any]] = []
+    if isinstance(keywords_node, dict):
+        maybe_keywords = keywords_node.get("keywords")
+        maybe_results = keywords_node.get("results")
+        if isinstance(maybe_keywords, list):
+            keyword_rows = [k for k in maybe_keywords if isinstance(k, dict)]
+        elif isinstance(maybe_results, list):
+            keyword_rows = [k for k in maybe_results if isinstance(k, dict)]
+
+    keyword_names = [k.get("name") for k in keyword_rows]
+
+    genres = {
+        _normalize_term(v)
+        for v in genre_names
+        if isinstance(v, str) and v.strip()
+    }
+    keywords = {
+        _normalize_term(v)
+        for v in keyword_names
+        if isinstance(v, str) and v.strip()
+    }
+
+    _cache_set(
+        key,
+        {
+            "genres": sorted(genres),
+            "keywords": sorted(keywords),
+        },
+    )
+    return genres, keywords

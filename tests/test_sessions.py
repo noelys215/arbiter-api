@@ -169,3 +169,175 @@ async def test_hard_filter_format_movie(async_client, user_factory, login_helper
     assert r.status_code == 201
     data = r.json()
     assert all(c["title"]["media_type"] == "movie" for c in data["candidates"])
+
+
+@pytest.mark.anyio
+async def test_mood_tags_use_synonyms_and_tmdb_taxonomy(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 301:
+            return {"science fiction"}, {"time travel", "parallel universe"}
+        if tmdb_id == 302:
+            return {"romance"}, {"date night"}
+        return set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="Mood")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    i1 = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 301, "media_type": "movie", "title": "Looper", "year": 2012, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 302, "media_type": "movie", "title": "RomCom", "year": 2010, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["mind bending"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+
+    # taxonomy + synonym should reduce to matching item(s) and return backend reason
+    assert len(data["candidates"]) == 1
+    assert data["candidates"][0]["watchlist_item_id"] == i1["id"]
+    assert data["candidates"][0]["reason"] == "Matches: Mind-Bender"
+
+
+@pytest.mark.anyio
+async def test_mood_matching_falls_back_when_no_taxonomy_hits(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = (tmdb_id, media_type)
+        return set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="Fallback")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    i1 = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 401, "media_type": "movie", "title": "A", "year": 2000, "poster_path": None},
+        )
+    ).json()
+    i2 = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 402, "media_type": "movie", "title": "B", "year": 2001, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["documentary"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+
+    # no metadata hits -> preserve normal fallback behavior (keep pool)
+    assert ids == {i1["id"], i2["id"]}
+
+
+@pytest.mark.anyio
+async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
+    async_client, client_factory, user_factory, login_helper
+):
+    async with client_factory() as client_b:
+        user_a = await user_factory(async_client, display_name="A")
+        await login_helper(async_client, email=user_a["email"], password=user_a["password"])
+        user_b = await user_factory(client_b, display_name="B")
+        await login_helper(client_b, email=user_b["email"], password=user_b["password"])
+
+        invite_b = (await async_client.post("/friends/invite")).json()["code"]
+        await client_b.post("/friends/accept", json={"code": invite_b})
+        friends = (await async_client.get("/friends")).json()
+        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+
+        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group_id = group["id"]
+
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 901, "media_type": "movie", "title": "A", "year": 2000, "poster_path": None},
+        )
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 902, "media_type": "movie", "title": "B", "year": 2001, "poster_path": None},
+        )
+
+        body_deal = {
+            "constraints": {"moods": ["cozy"]},
+            "confirm_ready": False,
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        }
+
+        # Both users deal, but neither confirms yet.
+        first = (await async_client.post(f"/groups/{group_id}/sessions", json=body_deal)).json()
+        session_id = first["session_id"]
+        second = (await client_b.post(f"/groups/{group_id}/sessions", json=body_deal)).json()
+        assert second["session_id"] == session_id
+
+        state_after_deal = (await async_client.get(f"/sessions/{session_id}")).json()
+        assert state_after_deal["status"] == "active"
+        assert state_after_deal["phase"] in ("collecting", "waiting")
+        assert state_after_deal["round"] == 0
+
+        # A confirms ready, but B has not confirmed.
+        confirm_body = {
+            "constraints": {},
+            "confirm_ready": True,
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        }
+        assert (await async_client.post(f"/groups/{group_id}/sessions", json=confirm_body)).status_code == 201
+        state_after_one_confirm = (await async_client.get(f"/sessions/{session_id}")).json()
+        assert state_after_one_confirm["status"] == "active"
+        assert state_after_one_confirm["phase"] in ("collecting", "waiting")
+        assert state_after_one_confirm["round"] == 0
+
+        # Once B confirms, session transitions to swiping and timer begins.
+        assert (await client_b.post(f"/groups/{group_id}/sessions", json=confirm_body)).status_code == 201
+        final_state = (await async_client.get(f"/sessions/{session_id}")).json()
+        assert final_state["status"] == "active"
+        assert final_state["phase"] in ("swiping", "waiting")
+        assert final_state["round"] == 1
+        assert 0 <= int(final_state["user_seconds_left"]) <= 60

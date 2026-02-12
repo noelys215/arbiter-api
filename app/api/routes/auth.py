@@ -25,8 +25,18 @@ from app.services.oauth import get_oauth_client, oauth_error_cls
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 COOKIE_NAME = "access_token"
+OAUTH_SESSION_COOKIE_NAME = "session"
 _USERNAME_MAX_LEN = 50
 _USERNAME_SAFE_RE = re.compile(r"[^a-z0-9_]+")
+
+
+def _auth_cookie_options() -> dict[str, object]:
+    return {
+        "httponly": True,
+        "secure": settings.env not in {"local", "test"},
+        "samesite": "lax",
+        "path": "/",
+    }
 
 
 def _set_auth_cookie(response: Response, user_id: str) -> None:
@@ -34,11 +44,28 @@ def _set_auth_cookie(response: Response, user_id: str) -> None:
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
-        httponly=True,
-        secure=settings.env not in {"local", "test"},
-        samesite="lax",
         max_age=settings.access_token_expire_minutes * 60,
-        path="/",
+        **_auth_cookie_options(),
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value="",
+        max_age=0,
+        expires=0,
+        **_auth_cookie_options(),
+    )
+
+
+def _clear_oauth_session_cookie(response: Response) -> None:
+    response.set_cookie(
+        key=OAUTH_SESSION_COOKIE_NAME,
+        value="",
+        max_age=0,
+        expires=0,
+        **_auth_cookie_options(),
     )
 
 
@@ -288,6 +315,9 @@ async def facebook_callback(request: Request, db: AsyncSession = Depends(get_db_
 
 
 @router.post("/logout", response_model=LogoutResponse)
-async def logout(response: Response):
-    response.delete_cookie(COOKIE_NAME, path="/")
+async def logout(request: Request, response: Response):
+    if "session" in request.scope:
+        request.session.clear()
+    _clear_auth_cookie(response)
+    _clear_oauth_session_cookie(response)
     return LogoutResponse(ok=True)

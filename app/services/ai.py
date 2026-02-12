@@ -123,16 +123,24 @@ Rules:
 - Be concise; no extra text.
 """
 
+    user_payload = json.dumps(
+        {
+            "ui_constraints": baseline.model_dump(),
+            "text": text,
+        },
+        ensure_ascii=True,
+    )
+
     payload = {
         "model": settings.openai_model,
         "input": [
-            {"role": "system", "content": prompt.strip()},
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": prompt.strip()}],
+            },
             {
                 "role": "user",
-                "content": {
-                    "ui_constraints": baseline.model_dump(),
-                    "text": text,
-                },
+                "content": [{"type": "input_text", "text": user_payload}],
             },
         ],
         "temperature": 0.2,
@@ -182,16 +190,24 @@ Rules:
 - Do not include anything other than JSON.
 """
 
+    user_payload = json.dumps(
+        {
+            "constraints": constraints.model_dump(),
+            "candidates": candidates,
+        },
+        ensure_ascii=True,
+    )
+
     payload = {
         "model": settings.openai_model,
         "input": [
-            {"role": "system", "content": prompt.strip()},
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": prompt.strip()}],
+            },
             {
                 "role": "user",
-                "content": {
-                    "constraints": constraints.model_dump(),
-                    "candidates": candidates,
-                },
+                "content": [{"type": "input_text", "text": user_payload}],
             },
         ],
         "temperature": 0.2,
