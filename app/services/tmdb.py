@@ -7,7 +7,8 @@ import httpx
 
 from app.core.config import settings
 
-_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+# Search results and taxonomy payloads share this in-memory cache.
+_CACHE: dict[str, tuple[float, Any]] = {}
 _TTL_SECONDS = 600
 
 
@@ -54,6 +55,12 @@ async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:
 
         tmdb_id = item.get("id")
         poster_path = item.get("poster_path")
+        raw_genre_ids = item.get("genre_ids")
+        genre_ids = [
+            int(v)
+            for v in (raw_genre_ids if isinstance(raw_genre_ids, list) else [])
+            if isinstance(v, int)
+        ]
 
         if media_type == "movie":
             title = item.get("title") or item.get("original_title") or ""
@@ -76,6 +83,7 @@ async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:
                 "title": title,
                 "year": year,
                 "poster_path": poster_path,
+                "genre_ids": genre_ids,
             }
         )
 
@@ -91,11 +99,11 @@ async def fetch_tmdb_title_taxonomy(
     *,
     tmdb_id: int,
     media_type: str,
-) -> tuple[set[str], set[str]]:
+) -> tuple[set[str], set[str], set[int]]:
     if media_type not in {"movie", "tv"}:
-        return set(), set()
+        return set(), set(), set()
     if settings.env == "test":
-        return set(), set()
+        return set(), set(), set()
 
     key = f"taxonomy:{media_type}:{tmdb_id}"
     cached = _cache_get(key)
@@ -110,7 +118,12 @@ async def fetch_tmdb_title_taxonomy(
             for v in cached.get("keywords", [])
             if isinstance(v, str) and v.strip()
         }
-        return genres, keywords
+        genre_ids = {
+            int(v)
+            for v in cached.get("genre_ids", [])
+            if isinstance(v, int) or (isinstance(v, str) and v.isdigit())
+        }
+        return genres, keywords, genre_ids
 
     headers = {
         "Authorization": f"Bearer {settings.tmdb_token}",
@@ -126,13 +139,15 @@ async def fetch_tmdb_title_taxonomy(
             r.raise_for_status()
             data = r.json()
     except (httpx.HTTPError, ValueError):
-        return set(), set()
+        return set(), set(), set()
 
-    genre_names = [
-        g.get("name")
-        for g in data.get("genres", [])
-        if isinstance(g, dict)
-    ]
+    genre_rows = [g for g in data.get("genres", []) if isinstance(g, dict)]
+    genre_names = [g.get("name") for g in genre_rows]
+    genre_ids = {
+        int(g["id"])
+        for g in genre_rows
+        if isinstance(g.get("id"), int)
+    }
 
     keywords_node = data.get("keywords", {})
     keyword_rows: list[dict[str, Any]] = []
@@ -162,6 +177,7 @@ async def fetch_tmdb_title_taxonomy(
         {
             "genres": sorted(genres),
             "keywords": sorted(keywords),
+            "genre_ids": sorted(genre_ids),
         },
     )
-    return genres, keywords
+    return genres, keywords, genre_ids

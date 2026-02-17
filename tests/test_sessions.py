@@ -277,6 +277,117 @@ async def test_mood_matching_falls_back_when_no_taxonomy_hits(async_client, monk
 
 
 @pytest.mark.anyio
+async def test_mood_tags_match_from_tmdb_genre_ids(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 501:
+            # TV taxonomy name can vary ("Sci-Fi & Fantasy"), so genre id is the stable signal.
+            return {"sci-fi & fantasy"}, set(), {10765}
+        if tmdb_id == 502:
+            return {"romance"}, {"date night"}, {10749}
+        return set(), set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="GenreID")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    i1 = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 501, "media_type": "tv", "title": "Mind Show", "year": 2020, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 502, "media_type": "movie", "title": "RomCom", "year": 2015, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["mind-bender"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+
+    assert len(data["candidates"]) == 1
+    assert data["candidates"][0]["watchlist_item_id"] == i1["id"]
+    assert data["candidates"][0]["reason"] == "Matches: Mind-Bender"
+
+
+@pytest.mark.anyio
+async def test_real_tmdb_genre_tag_science_fiction_is_supported(
+    async_client, monkeypatch, user_factory, login_helper
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 701:
+            return {"science fiction"}, {"time travel"}, {878}
+        if tmdb_id == 702:
+            return {"romance"}, {"date night"}, {10749}
+        return set(), set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="TMDBGenre")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    i1 = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 701, "media_type": "movie", "title": "SciFi", "year": 2021, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 702, "media_type": "movie", "title": "RomCom", "year": 2017, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["Science Fiction"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+
+    assert len(data["candidates"]) == 1
+    assert data["candidates"][0]["watchlist_item_id"] == i1["id"]
+    assert data["candidates"][0]["reason"] == "Matches: Science Fiction"
+
+
+@pytest.mark.anyio
 async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
     async_client, client_factory, user_factory, login_helper
 ):

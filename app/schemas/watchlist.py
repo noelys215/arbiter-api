@@ -17,6 +17,8 @@ class TitleOut(BaseModel):
     poster_path: str | None = None
     overview: str | None = None
     runtime_minutes: int | None = None
+    tmdb_genres: list[str] = Field(default_factory=list)
+    tmdb_genre_ids: list[int] = Field(default_factory=list)
 
 
 class AddWatchlistTMDB(BaseModel):

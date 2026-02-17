@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
@@ -7,6 +9,7 @@ from uuid import UUID
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.watchlist import AddWatchlistRequest, WatchlistItemOut, WatchlistPatchRequest, TitleOut
+from app.services.tmdb import fetch_tmdb_title_taxonomy
 from app.services.watchlist import (
     add_watchlist_item_tmdb,
     add_watchlist_item_manual,
@@ -18,9 +21,41 @@ from app.services.watchlist import (
 router = APIRouter(tags=["watchlist"])
 
 
-def to_out(item, already_exists: bool = False) -> WatchlistItemOut:
+async def _title_out_with_taxonomy(t) -> TitleOut:
+    tmdb_genres: list[str] = []
+    tmdb_genre_ids: list[int] = []
+    if t.source == "tmdb" and t.source_id:
+        try:
+            tmdb_id = int(t.source_id)
+        except (TypeError, ValueError):
+            tmdb_id = None
+        if tmdb_id is not None:
+            genres, _, genre_ids = await fetch_tmdb_title_taxonomy(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            tmdb_genres = sorted(genres)
+            tmdb_genre_ids = sorted(genre_ids)
+
+    return TitleOut(
+        id=t.id,
+        source=t.source,
+        source_id=t.source_id,
+        media_type=t.media_type,
+        name=t.name,
+        release_year=t.release_year,
+        poster_path=t.poster_path,
+        overview=t.overview,
+        runtime_minutes=t.runtime_minutes,
+        tmdb_genres=tmdb_genres,
+        tmdb_genre_ids=tmdb_genre_ids,
+    )
+
+
+async def to_out(item, already_exists: bool = False) -> WatchlistItemOut:
     t = item.title
     u = item.added_by_user
+    title_out = await _title_out_with_taxonomy(t)
     return WatchlistItemOut(
         id=item.id,
         group_id=item.group_id,
@@ -38,17 +73,7 @@ def to_out(item, already_exists: bool = False) -> WatchlistItemOut:
         status=item.status,
         snoozed_until=item.snoozed_until,
         created_at=item.created_at,
-        title=TitleOut(
-            id=t.id,
-            source=t.source,
-            source_id=t.source_id,
-            media_type=t.media_type,
-            name=t.name,
-            release_year=t.release_year,
-            poster_path=t.poster_path,
-            overview=t.overview,
-            runtime_minutes=t.runtime_minutes,
-        ),
+        title=title_out,
         already_exists=already_exists,
     )
 
@@ -73,7 +98,7 @@ async def add_watchlist_route(
                 poster_path=payload.poster_path,
             )
             await db.commit()
-            return to_out(item, already_exists=already)
+            return await to_out(item, already_exists=already)
 
         # manual
         item = await add_watchlist_item_manual(
@@ -87,7 +112,7 @@ async def add_watchlist_route(
             overview=getattr(payload, "overview", None),
         )
         await db.commit()
-        return to_out(item, already_exists=False)
+        return await to_out(item, already_exists=False)
 
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -105,7 +130,7 @@ async def list_watchlist_route(
 ):
     try:
         items = await list_watchlist(db, group_id=group_id, user_id=user.id, status=status, tonight=tonight)
-        return [to_out(i) for i in items]
+        return await asyncio.gather(*[to_out(i) for i in items])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 

@@ -9,3 +9,4 @@ class TMDBSearchItem(BaseModel):
     title: str
     year: int | None = None
     poster_path: str | None = None
+    genre_ids: list[int] = Field(default_factory=list)

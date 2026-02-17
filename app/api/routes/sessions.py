@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,7 @@ from app.schemas.sessions import (
 )
 from app.schemas.tonight_constraints import TonightConstraints
 from app.schemas.watchlist import TitleOut
+from app.services.tmdb import fetch_tmdb_title_taxonomy
 from app.services.sessions import (
     cast_vote,
     create_tonight_session,
@@ -28,6 +31,47 @@ from app.services.sessions import (
 )
 
 router = APIRouter(tags=["sessions"])
+
+
+async def _title_out_with_taxonomy(t) -> TitleOut:
+    tmdb_genres: list[str] = []
+    tmdb_genre_ids: list[int] = []
+    if t.source == "tmdb" and t.source_id:
+        try:
+            tmdb_id = int(t.source_id)
+        except (TypeError, ValueError):
+            tmdb_id = None
+        if tmdb_id is not None:
+            genres, _, genre_ids = await fetch_tmdb_title_taxonomy(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            tmdb_genres = sorted(genres)
+            tmdb_genre_ids = sorted(genre_ids)
+
+    return TitleOut(
+        id=t.id,
+        source=t.source,
+        source_id=t.source_id,
+        media_type=t.media_type,
+        name=t.name,
+        release_year=t.release_year,
+        poster_path=t.poster_path,
+        overview=t.overview,
+        runtime_minutes=t.runtime_minutes,
+        tmdb_genres=tmdb_genres,
+        tmdb_genre_ids=tmdb_genre_ids,
+    )
+
+
+async def _candidate_out(c) -> SessionCandidateOut:
+    t = c.watchlist_item.title
+    return SessionCandidateOut(
+        watchlist_item_id=c.watchlist_item_id,
+        position=c.position,
+        reason=c.ai_note,
+        title=await _title_out_with_taxonomy(t),
+    )
 
 
 @router.post("/groups/{group_id}/sessions", response_model=CreateSessionResponse, status_code=201)
@@ -62,17 +106,7 @@ async def create_session_route(
                     watchlist_item_id=wi.id,
                     position=c.position,
                     reason=c.ai_note,
-                    title=TitleOut(
-                        id=t.id,
-                        source=t.source,
-                        source_id=t.source_id,
-                        media_type=t.media_type,
-                        name=t.name,
-                        release_year=t.release_year,
-                        poster_path=t.poster_path,
-                        overview=t.overview,
-                        runtime_minutes=t.runtime_minutes,
-                    ),
+                    title=await _title_out_with_taxonomy(t),
                 )
             )
 
@@ -95,17 +129,7 @@ async def create_session_route(
                         watchlist_item_id=wi.id,
                         position=pos,
                         reason=None,
-                        title=TitleOut(
-                            id=t.id,
-                            source=t.source,
-                            source_id=t.source_id,
-                            media_type=t.media_type,
-                            name=t.name,
-                            release_year=t.release_year,
-                            poster_path=t.poster_path,
-                            overview=t.overview,
-                            runtime_minutes=t.runtime_minutes,
-                        ),
+                        title=await _title_out_with_taxonomy(t),
                     )
                 )
 
@@ -130,27 +154,6 @@ async def create_session_route(
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-def _candidate_out(c) -> SessionCandidateOut:
-    t = c.watchlist_item.title
-    return SessionCandidateOut(
-        watchlist_item_id=c.watchlist_item_id,
-        position=c.position,
-        reason=c.ai_note,
-        title=TitleOut(
-            id=t.id,
-            source=t.source,
-            source_id=t.source_id,
-            media_type=t.media_type,
-            name=t.name,
-            release_year=t.release_year,
-            poster_path=t.poster_path,
-            overview=t.overview,
-            runtime_minutes=t.runtime_minutes,
-        ),
-    )
-
 
 @router.post("/sessions/{session_id}/vote", status_code=200)
 async def vote_route(
@@ -204,7 +207,7 @@ async def session_state_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=[_candidate_out(c) for c in candidates],
+            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -241,7 +244,7 @@ async def shuffle_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=[_candidate_out(c) for c in candidates],
+            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -278,7 +281,7 @@ async def end_session_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=[_candidate_out(c) for c in candidates],
+            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))

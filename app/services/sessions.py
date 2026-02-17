@@ -213,6 +213,24 @@ TAG_PROFILES: dict[str, dict[str, set[str]]] = {
     },
 }
 
+TAG_GENRE_IDS: dict[str, set[int]] = {
+    "mind-bender": {878, 10765, 9648, 53, 14},
+    "cozy": {10751, 16, 35, 10762, 10749},
+    "feel-good": {35, 10751, 10402, 10749},
+    "dark comedy": {35, 80, 53, 18},
+    "thrilling": {53, 28, 80, 9648, 10759},
+    "slow burn": {18, 9648, 53},
+    "heartfelt": {18, 10749, 10751},
+    "epic": {12, 28, 14, 10759, 10768, 10752, 36},
+    "nostalgic": {10751, 35, 18},
+    "romantic": {10749, 18, 35},
+    "high energy": {28, 12, 10402, 80, 10759},
+    "cerebral": {9648, 878, 18, 10765},
+    "scary": {27, 53, 9648},
+    "documentary": {99},
+    "animated": {16, 10762, 10751, 14, 12, 10765},
+}
+
 
 TAG_ALIASES: dict[str, str] = {
     "mind bender": "mind-bender",
@@ -241,6 +259,154 @@ TAG_ALIASES: dict[str, str] = {
     "animation": "animated",
 }
 
+TMDB_GENRE_DEFINITIONS: dict[str, tuple[set[int], set[str], set[str]]] = {
+    "action": (
+        {28, 10759},
+        {"action", "action & adventure"},
+        {"action"},
+    ),
+    "adventure": (
+        {12, 10759},
+        {"adventure", "action & adventure"},
+        {"adventure"},
+    ),
+    "action & adventure": (
+        {10759, 28, 12},
+        {"action & adventure", "action", "adventure"},
+        {"action & adventure", "action and adventure"},
+    ),
+    "animation": (
+        {16},
+        {"animation"},
+        {"animation", "animated"},
+    ),
+    "comedy": (
+        {35},
+        {"comedy"},
+        {"comedy"},
+    ),
+    "crime": (
+        {80},
+        {"crime"},
+        {"crime"},
+    ),
+    "documentary": (
+        {99},
+        {"documentary"},
+        {"documentary", "doc"},
+    ),
+    "drama": (
+        {18},
+        {"drama"},
+        {"drama"},
+    ),
+    "family": (
+        {10751},
+        {"family", "kids"},
+        {"family"},
+    ),
+    "fantasy": (
+        {14, 10765},
+        {"fantasy", "sci-fi & fantasy"},
+        {"fantasy"},
+    ),
+    "history": (
+        {36},
+        {"history"},
+        {"history", "historical"},
+    ),
+    "horror": (
+        {27},
+        {"horror"},
+        {"horror"},
+    ),
+    "kids": (
+        {10762},
+        {"kids", "family"},
+        {"kids", "children"},
+    ),
+    "music": (
+        {10402},
+        {"music"},
+        {"music", "musical"},
+    ),
+    "mystery": (
+        {9648},
+        {"mystery"},
+        {"mystery"},
+    ),
+    "news": (
+        {10763},
+        {"news"},
+        {"news"},
+    ),
+    "reality": (
+        {10764},
+        {"reality"},
+        {"reality", "reality tv"},
+    ),
+    "romance": (
+        {10749},
+        {"romance"},
+        {"romance", "romantic"},
+    ),
+    "science fiction": (
+        {878, 10765},
+        {"science fiction", "sci-fi & fantasy"},
+        {"science fiction", "sci-fi", "sci fi", "scifi"},
+    ),
+    "sci-fi & fantasy": (
+        {10765, 878, 14},
+        {"sci-fi & fantasy", "science fiction", "fantasy"},
+        {"sci-fi & fantasy", "sci fi & fantasy", "sci-fi and fantasy"},
+    ),
+    "soap": (
+        {10766},
+        {"soap"},
+        {"soap", "soap opera"},
+    ),
+    "talk": (
+        {10767},
+        {"talk"},
+        {"talk", "talk show"},
+    ),
+    "tv movie": (
+        {10770},
+        {"tv movie"},
+        {"tv movie", "television movie"},
+    ),
+    "thriller": (
+        {53},
+        {"thriller"},
+        {"thriller"},
+    ),
+    "war": (
+        {10752, 10768},
+        {"war", "war & politics"},
+        {"war"},
+    ),
+    "war & politics": (
+        {10768, 10752},
+        {"war & politics", "war", "history"},
+        {"war & politics", "war and politics"},
+    ),
+    "western": (
+        {37},
+        {"western"},
+        {"western"},
+    ),
+}
+
+for canonical, (genre_ids, genres, aliases) in TMDB_GENRE_DEFINITIONS.items():
+    profile = TAG_PROFILES.setdefault(canonical, {"genres": set(), "keywords": set()})
+    profile["genres"].update(genres)
+    profile["keywords"].update(aliases)
+    profile["keywords"].add(canonical)
+    TAG_GENRE_IDS.setdefault(canonical, set()).update(genre_ids)
+    TAG_ALIASES[canonical] = canonical
+    for alias in aliases:
+        TAG_ALIASES[alias] = canonical
+
 
 def _display_mood_name(value: str) -> str:
     if value == "mind-bender":
@@ -253,6 +419,16 @@ def _display_mood_name(value: str) -> str:
         return "Dark Comedy"
     if value == "slow burn":
         return "Slow Burn"
+    if value == "tv movie":
+        return "TV Movie"
+    if value == "science fiction":
+        return "Science Fiction"
+    if value == "sci-fi & fantasy":
+        return "Sci-Fi & Fantasy"
+    if value == "action & adventure":
+        return "Action & Adventure"
+    if value == "war & politics":
+        return "War & Politics"
     return value.title()
 
 
@@ -298,7 +474,7 @@ async def _build_item_tag_matches(
     if not items or not requested_moods:
         return {}
 
-    taxonomy_map: dict[uuid.UUID, tuple[set[str], set[str]]] = {}
+    taxonomy_map: dict[uuid.UUID, tuple[set[str], set[str], set[int]]] = {}
 
     async def _load_tmdb_taxonomy(it: WatchlistItem):
         t = it.title
@@ -308,11 +484,17 @@ async def _build_item_tag_matches(
             tmdb_id = int(t.source_id)
         except (TypeError, ValueError):
             return
-        genres, keywords = await fetch_tmdb_title_taxonomy(
+        taxonomy = await fetch_tmdb_title_taxonomy(
             tmdb_id=tmdb_id,
             media_type=t.media_type,
         )
-        taxonomy_map[it.id] = (genres, keywords)
+        # Backward-compatible unpacking for tests that monkeypatch the TMDB fetcher.
+        if isinstance(taxonomy, tuple) and len(taxonomy) == 3:
+            genres, keywords, genre_ids = taxonomy
+        else:
+            genres, keywords = taxonomy  # type: ignore[misc]
+            genre_ids = set()
+        taxonomy_map[it.id] = (genres, keywords, genre_ids)
 
     await asyncio.gather(*[_load_tmdb_taxonomy(it) for it in items])
 
@@ -321,7 +503,10 @@ async def _build_item_tag_matches(
         t = it.title
         text_blob = " ".join([_norm_text(t.name), _norm_text(t.overview)])
         text_tokens = _tokenize(text_blob)
-        tmdb_genres, tmdb_keywords = taxonomy_map.get(it.id, (set(), set()))
+        tmdb_genres, tmdb_keywords, tmdb_genre_ids = taxonomy_map.get(
+            it.id,
+            (set(), set(), set()),
+        )
 
         score = 0
         hits: list[str] = []
@@ -331,6 +516,10 @@ async def _build_item_tag_matches(
                 continue
 
             mood_score = 0
+            genre_id_hits = tmdb_genre_ids & TAG_GENRE_IDS.get(mood, set())
+            if genre_id_hits:
+                mood_score += 5
+
             genre_hits = tmdb_genres & profile["genres"]
             if genre_hits:
                 mood_score += 3
