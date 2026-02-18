@@ -8,12 +8,13 @@ from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
-from app.schemas.watchlist import AddWatchlistRequest, WatchlistItemOut, WatchlistPatchRequest, TitleOut
+from app.schemas.watchlist import AddWatchlistRequest, WatchlistItemOut, WatchlistPageOut, WatchlistPatchRequest, TitleOut
 from app.services.tmdb import fetch_tmdb_title_taxonomy
 from app.services.watchlist import (
     add_watchlist_item_tmdb,
     add_watchlist_item_manual,
     list_watchlist,
+    list_watchlist_page,
     patch_watchlist_item,
     UNSET
 )
@@ -120,16 +121,53 @@ async def add_watchlist_route(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/groups/{group_id}/watchlist", response_model=list[WatchlistItemOut])
+@router.get("/groups/{group_id}/watchlist", response_model=list[WatchlistItemOut] | WatchlistPageOut)
 async def list_watchlist_route(
     group_id: UUID,
     status: str | None = Query(default=None, pattern="^(watchlist|watched)$"),
     tonight: bool = Query(default=False),
+    q: str | None = Query(default=None),
+    media_type: str | None = Query(default=None, pattern="^(movie|tv)$"),
+    genre_id: int | None = Query(default=None, ge=1),
+    sort: str = Query(default="recent", pattern="^(recent|oldest|alpha)$"),
+    limit: int = Query(default=24, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+    paginate: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
-        items = await list_watchlist(db, group_id=group_id, user_id=user.id, status=status, tonight=tonight)
+        if paginate:
+            page = await list_watchlist_page(
+                db,
+                group_id=group_id,
+                user_id=user.id,
+                status=status,
+                tonight=tonight,
+                q=q,
+                media_type=media_type,
+                genre_id=genre_id,
+                sort=sort,
+                limit=limit,
+                cursor=cursor,
+            )
+            items_out = await asyncio.gather(*[to_out(i) for i in page.items])
+            return WatchlistPageOut(
+                items=items_out,
+                next_cursor=page.next_cursor,
+                total_count=page.total_count,
+            )
+
+        items = await list_watchlist(
+            db,
+            group_id=group_id,
+            user_id=user.id,
+            status=status,
+            tonight=tonight,
+            q=q,
+            media_type=media_type,
+            sort=sort,
+        )
         return await asyncio.gather(*[to_out(i) for i in items])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))

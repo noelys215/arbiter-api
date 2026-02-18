@@ -63,6 +63,12 @@ class WatchlistItemOut(BaseModel):
     already_exists: bool = False
 
 
+class WatchlistPageOut(BaseModel):
+    items: list[WatchlistItemOut]
+    next_cursor: str | None = None
+    total_count: int
+
+
 class WatchlistPatchRequest(BaseModel):
     status: str | None = Field(default=None, pattern="^(watchlist|watched)$")
     snoozed_until: datetime | None = None

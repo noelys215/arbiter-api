@@ -388,6 +388,84 @@ async def test_real_tmdb_genre_tag_science_fiction_is_supported(
 
 
 @pytest.mark.anyio
+async def test_runtime_vibe_tag_under_30_prefers_short_tv_titles(
+    async_client, monkeypatch, user_factory, login_helper
+):
+    from app.services import sessions as sessions_service
+    from app.services import watchlist as watchlist_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = (tmdb_id, media_type)
+        return set(), set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    async def fake_tmdb_details(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 801:
+            return {"runtime_minutes": 12, "overview": "Very short show"}
+        if tmdb_id == 802:
+            return {"runtime_minutes": 28, "overview": "Half-hour show"}
+        if tmdb_id == 803:
+            return {"runtime_minutes": 45, "overview": "Longer episode"}
+        if tmdb_id == 804:
+            return {"runtime_minutes": 10, "overview": "Short film"}
+        return {}
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+    monkeypatch.setattr(watchlist_service, "fetch_tmdb_title_details", fake_tmdb_details)
+
+    user = await user_factory(async_client, display_name="RuntimeTag")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    short_tv = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 801, "media_type": "tv", "title": "Quick TV", "year": 2020, "poster_path": None},
+        )
+    ).json()
+    half_hour_tv = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 802, "media_type": "tv", "title": "Half TV", "year": 2020, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 803, "media_type": "tv", "title": "Long TV", "year": 2020, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 804, "media_type": "movie", "title": "Short Film", "year": 2020, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["Under 30 Mins"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {short_tv["id"], half_hour_tv["id"]}
+    assert all(c["reason"] == "Matches: Under 30 Mins" for c in data["candidates"])
+
+
+@pytest.mark.anyio
 async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
     async_client, client_factory, user_factory, login_helper
 ):

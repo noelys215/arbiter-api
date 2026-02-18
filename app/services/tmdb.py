@@ -181,3 +181,53 @@ async def fetch_tmdb_title_taxonomy(
         },
     )
     return genres, keywords, genre_ids
+
+
+def _runtime_from_tmdb_payload(*, media_type: str, data: dict[str, Any]) -> int | None:
+    if media_type == "movie":
+        runtime = data.get("runtime")
+        if isinstance(runtime, int) and runtime > 0:
+            return runtime
+        return None
+
+    episode_runtime = data.get("episode_run_time")
+    if isinstance(episode_runtime, list):
+        for value in episode_runtime:
+            if isinstance(value, int) and value > 0:
+                return value
+    return None
+
+
+async def fetch_tmdb_title_details(*, tmdb_id: int, media_type: str) -> dict[str, Any]:
+    if media_type not in {"movie", "tv"}:
+        return {}
+    if settings.env == "test":
+        return {}
+
+    key = f"details:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+
+    path = f"/{media_type}/{tmdb_id}"
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(path, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return {}
+
+    runtime_minutes = _runtime_from_tmdb_payload(media_type=media_type, data=data)
+    overview = data.get("overview")
+    details = {
+        "runtime_minutes": runtime_minutes,
+        "overview": overview if isinstance(overview, str) and overview.strip() else None,
+    }
+    _cache_set(key, details)
+    return details

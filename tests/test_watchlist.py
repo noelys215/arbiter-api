@@ -85,6 +85,78 @@ async def test_watchlist_tmdb_add_and_duplicate_returns_existing(async_client, u
 
 
 @pytest.mark.anyio
+async def test_watchlist_tmdb_add_populates_runtime_and_overview(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import watchlist as watchlist_service
+
+    async def fake_details(*, tmdb_id: int, media_type: str):
+        assert tmdb_id == 603
+        assert media_type == "movie"
+        return {"runtime_minutes": 136, "overview": "A computer hacker learns reality is a simulation."}
+
+    monkeypatch.setattr(watchlist_service, "fetch_tmdb_title_details", fake_details)
+
+    user = await user_factory(async_client, display_name="A")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+
+    payload = {
+        "type": "tmdb",
+        "tmdb_id": 603,
+        "media_type": "movie",
+        "title": "The Matrix",
+        "year": 1999,
+        "poster_path": "/matrix.jpg",
+    }
+    r = await async_client.post(f"/groups/{group_id}/watchlist", json=payload)
+    assert r.status_code == 201, r.text
+    data = r.json()
+    assert data["title"]["runtime_minutes"] == 136
+    assert data["title"]["overview"] == "A computer hacker learns reality is a simulation."
+
+
+@pytest.mark.anyio
+async def test_watchlist_tmdb_add_backfills_runtime_for_existing_title(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import watchlist as watchlist_service
+
+    async def fake_details_none(*, tmdb_id: int, media_type: str):
+        _ = (tmdb_id, media_type)
+        return {}
+
+    async def fake_details_runtime(*, tmdb_id: int, media_type: str):
+        _ = (tmdb_id, media_type)
+        return {"runtime_minutes": 121, "overview": "Backfilled overview"}
+
+    monkeypatch.setattr(watchlist_service, "fetch_tmdb_title_details", fake_details_none)
+
+    user = await user_factory(async_client, display_name="A")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group_1 = (await async_client.post("/groups", json={"name": "G1", "member_user_ids": []})).json()["id"]
+    group_2 = (await async_client.post("/groups", json={"name": "G2", "member_user_ids": []})).json()["id"]
+
+    payload = {
+        "type": "tmdb",
+        "tmdb_id": 7001,
+        "media_type": "movie",
+        "title": "Legacy Runtime",
+        "year": 2001,
+        "poster_path": None,
+    }
+
+    r1 = await async_client.post(f"/groups/{group_1}/watchlist", json=payload)
+    assert r1.status_code == 201, r1.text
+    assert r1.json()["title"]["runtime_minutes"] is None
+
+    monkeypatch.setattr(watchlist_service, "fetch_tmdb_title_details", fake_details_runtime)
+    r2 = await async_client.post(f"/groups/{group_2}/watchlist", json=payload)
+    assert r2.status_code == 201, r2.text
+    assert r2.json()["title"]["runtime_minutes"] == 121
+
+    listing = await async_client.get(f"/groups/{group_1}/watchlist")
+    assert listing.status_code == 200, listing.text
+    assert listing.json()[0]["title"]["runtime_minutes"] == 121
+
+
+@pytest.mark.anyio
 async def test_watchlist_manual_add(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
@@ -252,3 +324,100 @@ async def test_patch_empty_body_rejected(async_client, user_factory, login_helpe
 
     r = await async_client.patch(f"/watchlist-items/{item['id']}", json={})
     assert r.status_code in (400, 422)
+
+
+@pytest.mark.anyio
+async def test_watchlist_paginated_query_and_load_more(async_client, user_factory, login_helper):
+    user = await user_factory(async_client, display_name="Pager")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+
+    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+
+    for title in ["Zulu", "Alpha", "Bravo"]:
+        r = await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "manual", "title": title, "year": 2020, "media_type": "movie"},
+        )
+        assert r.status_code == 201, r.text
+
+    first = await async_client.get(
+        f"/groups/{group_id}/watchlist",
+        params={"paginate": "true", "limit": 2, "sort": "recent"},
+    )
+    assert first.status_code == 200, first.text
+    first_data = first.json()
+    assert "items" in first_data
+    assert first_data["total_count"] == 3
+    assert len(first_data["items"]) == 2
+    assert first_data["next_cursor"] is not None
+
+    second = await async_client.get(
+        f"/groups/{group_id}/watchlist",
+        params={
+            "paginate": "true",
+            "limit": 2,
+            "sort": "recent",
+            "cursor": first_data["next_cursor"],
+        },
+    )
+    assert second.status_code == 200, second.text
+    second_data = second.json()
+    assert len(second_data["items"]) == 1
+    assert second_data["next_cursor"] is None
+    assert second_data["total_count"] == 3
+
+    oldest = await async_client.get(
+        f"/groups/{group_id}/watchlist",
+        params={"paginate": "true", "limit": 10, "sort": "oldest"},
+    )
+    assert oldest.status_code == 200, oldest.text
+    oldest_names = [row["title"]["name"] for row in oldest.json()["items"]]
+    assert oldest_names == ["Zulu", "Alpha", "Bravo"]
+
+    searched = await async_client.get(
+        f"/groups/{group_id}/watchlist",
+        params={"paginate": "true", "q": "alp"},
+    )
+    assert searched.status_code == 200, searched.text
+    searched_data = searched.json()
+    assert searched_data["total_count"] == 1
+    assert searched_data["items"][0]["title"]["name"] == "Alpha"
+
+
+@pytest.mark.anyio
+async def test_watchlist_paginated_genre_filter(async_client, monkeypatch, user_factory, login_helper):
+    from app.services import watchlist as watchlist_service
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 1101:
+            return {"science fiction"}, set(), {878}
+        if tmdb_id == 1102:
+            return {"romance"}, set(), {10749}
+        return set(), set(), set()
+
+    monkeypatch.setattr(watchlist_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+
+    user = await user_factory(async_client, display_name="Genre")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+
+    sci = await async_client.post(
+        f"/groups/{group_id}/watchlist",
+        json={"type": "tmdb", "tmdb_id": 1101, "media_type": "movie", "title": "Sci", "year": 2020, "poster_path": None},
+    )
+    assert sci.status_code == 201, sci.text
+    _ = await async_client.post(
+        f"/groups/{group_id}/watchlist",
+        json={"type": "tmdb", "tmdb_id": 1102, "media_type": "movie", "title": "Rom", "year": 2020, "poster_path": None},
+    )
+
+    r = await async_client.get(
+        f"/groups/{group_id}/watchlist",
+        params={"paginate": "true", "genre_id": 878, "limit": 24},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total_count"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["id"] == sci.json()["id"]

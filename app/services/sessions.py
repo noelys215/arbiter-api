@@ -211,6 +211,26 @@ TAG_PROFILES: dict[str, dict[str, set[str]]] = {
         "genres": {"animation", "family", "fantasy", "adventure"},
         "keywords": {"animated", "anime", "cartoon", "pixar", "dreamworks"},
     },
+    "under 30 min": {
+        "genres": set(),
+        "keywords": {
+            "under 30 min",
+            "under 30 mins",
+            "under 30 minutes",
+            "short episode",
+            "quick watch",
+        },
+    },
+    "under 15 min": {
+        "genres": set(),
+        "keywords": {
+            "under 15 min",
+            "under 15 mins",
+            "under 15 minutes",
+            "micro episode",
+            "very short",
+        },
+    },
 }
 
 TAG_GENRE_IDS: dict[str, set[int]] = {
@@ -229,6 +249,11 @@ TAG_GENRE_IDS: dict[str, set[int]] = {
     "scary": {27, 53, 9648},
     "documentary": {99},
     "animated": {16, 10762, 10751, 14, 12, 10765},
+}
+
+RUNTIME_TAG_RULES: dict[str, dict[str, Any]] = {
+    "under 30 min": {"max_minutes": 30, "media_types": {"tv"}},
+    "under 15 min": {"max_minutes": 15, "media_types": {"tv"}},
 }
 
 
@@ -257,6 +282,17 @@ TAG_ALIASES: dict[str, str] = {
     "doc": "documentary",
     "animated": "animated",
     "animation": "animated",
+    "under 30 min": "under 30 min",
+    "under 30 mins": "under 30 min",
+    "under 30 minutes": "under 30 min",
+    "under 15 min": "under 15 min",
+    "under 15 mins": "under 15 min",
+    "under 15 minutes": "under 15 min",
+    "quick episodes": "under 30 min",
+    "quick episode": "under 30 min",
+    "short episodes": "under 30 min",
+    "very short episodes": "under 15 min",
+    "micro episodes": "under 15 min",
 }
 
 TMDB_GENRE_DEFINITIONS: dict[str, tuple[set[int], set[str], set[str]]] = {
@@ -429,6 +465,10 @@ def _display_mood_name(value: str) -> str:
         return "Action & Adventure"
     if value == "war & politics":
         return "War & Politics"
+    if value == "under 30 min":
+        return "Under 30 Mins"
+    if value == "under 15 min":
+        return "Under 15 Mins"
     return value.title()
 
 
@@ -511,6 +551,24 @@ async def _build_item_tag_matches(
         score = 0
         hits: list[str] = []
         for mood in requested_moods:
+            runtime_rule = RUNTIME_TAG_RULES.get(mood)
+            if runtime_rule:
+                max_minutes = runtime_rule.get("max_minutes")
+                media_types = runtime_rule.get("media_types") or set()
+                runtime_minutes = t.runtime_minutes
+                media_ok = not media_types or t.media_type in media_types
+                if (
+                    isinstance(max_minutes, int)
+                    and max_minutes > 0
+                    and isinstance(runtime_minutes, int)
+                    and runtime_minutes > 0
+                    and runtime_minutes <= max_minutes
+                    and media_ok
+                ):
+                    score += 8
+                    hits.append(mood)
+                continue
+
             profile = TAG_PROFILES.get(mood)
             if not profile:
                 continue

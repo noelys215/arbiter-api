@@ -236,6 +236,34 @@ pytest
 
 Tests use a dedicated test database defined by `DATABASE_URL` in the environment. In tests, the schema is created and dropped automatically.
 
+## TMDB backfill script
+
+Use this one-off script to backfill missing `runtime_minutes` and `overview` for existing TMDB titles.
+
+1) Dry-run (recommended first):
+```bash
+./.venv/bin/python scripts/backfill_tmdb_title_details.py --dry-run
+```
+
+2) Apply changes:
+```bash
+./.venv/bin/python scripts/backfill_tmdb_title_details.py --apply
+```
+
+Optional flags:
+- `--batch-size 200`
+- `--max-items 500`
+- `--sleep-ms 150`
+- `--only-missing-runtime`
+- `--only-missing-overview`
+- `--verbose`
+
+Makefile wrapper:
+```bash
+make backfill-tmdb-details BACKFILL_ARGS="--dry-run"
+make backfill-tmdb-details BACKFILL_ARGS="--apply"
+```
+
 ## Operational notes
 
 - Auth is cookie-based (`access_token`).
