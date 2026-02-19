@@ -53,3 +53,45 @@ async def test_logout_clears_oauth_session_cookie(client):
     assert logout.status_code == 200
     assert logout.json() == {"ok": True}
     assert client.cookies.get("session") is None
+
+
+async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    class _FakeProfileResponse:
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {
+                "email": "google-avatar@example.com",
+                "name": "Google Avatar",
+                "picture": "https://example.com/google-avatar.png",
+            }
+
+    class _FakeGoogleClient:
+        async def authorize_access_token(self, request):
+            _ = request
+            return {"userinfo": {"email": "google-avatar@example.com", "name": "Google Avatar"}}
+
+        async def parse_id_token(self, request, token):
+            _ = (request, token)
+            return None
+
+        async def get(self, path, token=None):
+            _ = token
+            assert path == "userinfo"
+            return _FakeProfileResponse()
+
+    monkeypatch.setattr(
+        auth_routes,
+        "get_oauth_client",
+        lambda provider: _FakeGoogleClient() if provider == "google" else None,
+    )
+
+    callback = await client.get("/auth/google/callback", follow_redirects=False)
+    assert callback.status_code == 302
+
+    me = await client.get("/me")
+    assert me.status_code == 200, me.text
+    assert me.json()["avatar_url"] == "https://example.com/google-avatar.png"

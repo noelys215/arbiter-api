@@ -107,6 +107,34 @@ def _clean_email(value: object) -> str | None:
     return normalized.lower()
 
 
+def _merge_oauth_claims(base: dict[str, object], extra: dict[str, object]) -> dict[str, object]:
+    merged = dict(base)
+    for key, value in extra.items():
+        existing = merged.get(key)
+        if existing is None or existing == "":
+            merged[key] = value
+    return merged
+
+
+def _extract_avatar_url(payload: dict[str, object]) -> str | None:
+    direct = _clean_text(payload.get("picture"))
+    if direct:
+        return direct
+
+    avatar_direct = _clean_text(payload.get("avatar_url"))
+    if avatar_direct:
+        return avatar_direct
+
+    picture = payload.get("picture")
+    if isinstance(picture, dict):
+        picture_data = picture.get("data")
+        if isinstance(picture_data, dict):
+            nested = _clean_text(picture_data.get("url"))
+            if nested:
+                return nested
+    return None
+
+
 async def _username_exists(db: AsyncSession, username: str) -> bool:
     result = await db.execute(select(User.id).where(User.username == username))
     return result.scalar_one_or_none() is not None
@@ -219,24 +247,30 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
 
     try:
         token = await client.authorize_access_token(request)
-        userinfo = token.get("userinfo")
-        if not isinstance(userinfo, dict):
-            userinfo = {}
+        userinfo: dict[str, object] = {}
 
-        if not userinfo:
-            try:
-                parsed = await client.parse_id_token(request, token)
-            except Exception:
-                parsed = None
-            if isinstance(parsed, dict):
-                userinfo = parsed
+        token_userinfo = token.get("userinfo")
+        if isinstance(token_userinfo, dict):
+            userinfo = _merge_oauth_claims(userinfo, token_userinfo)
 
-        if not userinfo:
+        try:
+            parsed = await client.parse_id_token(request, token)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            userinfo = _merge_oauth_claims(userinfo, parsed)
+
+        needs_profile_fetch = (
+            not _clean_email(userinfo.get("email"))
+            or not _clean_text(userinfo.get("name"))
+            or not _extract_avatar_url(userinfo)
+        )
+        if needs_profile_fetch:
             profile_response = await client.get("userinfo", token=token)
             if profile_response.is_success:
                 profile_data = profile_response.json()
                 if isinstance(profile_data, dict):
-                    userinfo = profile_data
+                    userinfo = _merge_oauth_claims(userinfo, profile_data)
     except oauth_error_cls:
         return _oauth_failure_redirect("google_oauth_failed")
     except Exception:
@@ -247,7 +281,7 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
         return _oauth_failure_redirect("google_email_required")
 
     display_name = _clean_text(userinfo.get("name")) or email.split("@", 1)[0]
-    avatar_url = _clean_text(userinfo.get("picture"))
+    avatar_url = _extract_avatar_url(userinfo)
 
     user = await _upsert_oauth_user(
         db,
