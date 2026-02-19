@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import html
+import re
 import time
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -10,6 +13,15 @@ from app.core.config import settings
 # Search results and taxonomy payloads share this in-memory cache.
 _CACHE: dict[str, tuple[float, Any]] = {}
 _TTL_SECONDS = 600
+_STREAMING_BUCKETS = ("flatrate", "ads", "free")
+_DEFAULT_PROVIDER_REGION = "US"
+_EXCLUDED_STREAMING_PROVIDER_NAMES = {
+    "netflix standard with ads",
+}
+_JUSTWATCH_ANCHOR_RE = re.compile(
+    r'<a href="(?P<href>https://click\.justwatch\.com/a\?[^"]+)"[^>]*title="(?P<title>[^"]+)"',
+    flags=re.IGNORECASE,
+)
 
 
 def _cache_get(key: str):
@@ -231,3 +243,188 @@ async def fetch_tmdb_title_details(*, tmdb_id: int, media_type: str) -> dict[str
     }
     _cache_set(key, details)
     return details
+
+
+def _safe_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _dedupe_streaming_providers(region_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for bucket in _STREAMING_BUCKETS:
+        rows = region_payload.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = row.get("provider_name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            normalized = name.strip()
+            if normalized.lower() in _EXCLUDED_STREAMING_PROVIDER_NAMES:
+                continue
+            provider_id = _safe_int(row.get("provider_id"))
+            key = str(provider_id) if provider_id is not None else normalized.lower()
+            if key in deduped:
+                continue
+            deduped[key] = {
+                "provider_id": provider_id,
+                "provider_name": normalized,
+                "logo_path": row.get("logo_path") if isinstance(row.get("logo_path"), str) else None,
+                "display_priority": _safe_int(row.get("display_priority")),
+            }
+
+    providers = list(deduped.values())
+    providers.sort(
+        key=lambda value: (
+            value.get("display_priority")
+            if isinstance(value.get("display_priority"), int)
+            else 9999,
+            value.get("provider_name") or "",
+        )
+    )
+    return providers
+
+
+def _extract_direct_streaming_urls_from_watch_html(markup: str) -> dict[str, str]:
+    if not isinstance(markup, str) or not markup.strip():
+        return {}
+
+    out: dict[str, str] = {}
+    for match in _JUSTWATCH_ANCHOR_RE.finditer(markup):
+        title_attr = html.unescape(match.group("title") or "").strip()
+        title_lower = title_attr.lower()
+        if not title_lower.startswith("watch "):
+            continue
+
+        split_at = title_lower.rfind(" on ")
+        if split_at < 0:
+            continue
+        provider_name = title_attr[split_at + 4 :].strip()
+        if not provider_name:
+            continue
+
+        href = html.unescape(match.group("href") or "").strip()
+        if not href:
+            continue
+
+        parsed_href = urlparse(href)
+        query = parse_qs(parsed_href.query)
+        raw_target = query.get("r", [None])[0]
+        if not isinstance(raw_target, str) or not raw_target.strip():
+            continue
+
+        target = unquote(raw_target).strip()
+        if not target.startswith(("http://", "https://")):
+            continue
+
+        key = provider_name.lower()
+        if key not in out:
+            out[key] = target
+
+    return out
+
+
+async def _fetch_tmdb_watch_page_streaming_links(
+    *,
+    tmdb_id: int,
+    media_type: str,
+    region: str,
+) -> dict[str, str]:
+    normalized_region = (region or _DEFAULT_PROVIDER_REGION).strip().upper() or _DEFAULT_PROVIDER_REGION
+    path = f"/{media_type}/{tmdb_id}/watch"
+    params = {"locale": normalized_region}
+    headers = {
+        "Accept": "text/html,application/xhtml+xml",
+        "User-Agent": "ArbiterTMDBWatcher/1.0",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://www.themoviedb.org",
+            timeout=8,
+            follow_redirects=True,
+        ) as client:
+            r = await client.get(path, params=params, headers=headers)
+            r.raise_for_status()
+            markup = r.text
+    except httpx.HTTPError:
+        return {}
+
+    return _extract_direct_streaming_urls_from_watch_html(markup)
+
+
+async def fetch_tmdb_watch_providers(
+    *,
+    tmdb_id: int,
+    media_type: str,
+    region: str = _DEFAULT_PROVIDER_REGION,
+) -> dict[str, Any]:
+    if media_type not in {"movie", "tv"}:
+        return {"region": region.upper(), "link": None, "streaming_providers": []}
+    if settings.env == "test":
+        return {"region": region.upper(), "link": None, "streaming_providers": []}
+
+    normalized_region = (region or _DEFAULT_PROVIDER_REGION).strip().upper() or _DEFAULT_PROVIDER_REGION
+    key = f"providers:{media_type}:{tmdb_id}:{normalized_region}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        providers = cached.get("streaming_providers")
+        if isinstance(providers, list):
+            return {
+                "region": normalized_region,
+                "link": cached.get("link") if isinstance(cached.get("link"), str) else None,
+                "streaming_providers": [dict(row) for row in providers if isinstance(row, dict)],
+            }
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+    path = f"/{media_type}/{tmdb_id}/watch/providers"
+
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(path, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return {"region": normalized_region, "link": None, "streaming_providers": []}
+
+    results = data.get("results")
+    region_payload = results.get(normalized_region) if isinstance(results, dict) else {}
+    if not isinstance(region_payload, dict):
+        region_payload = {}
+
+    link = region_payload.get("link") if isinstance(region_payload.get("link"), str) else None
+    providers = _dedupe_streaming_providers(region_payload)
+    deep_links_by_provider = (
+        await _fetch_tmdb_watch_page_streaming_links(
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            region=normalized_region,
+        )
+        if providers
+        else {}
+    )
+    for provider in providers:
+        name = provider.get("provider_name")
+        key = name.lower() if isinstance(name, str) else None
+        provider["streaming_url"] = (
+            deep_links_by_provider.get(key)
+            if isinstance(key, str) and key
+            else None
+        )
+
+    payload = {
+        "region": normalized_region,
+        "link": link,
+        "streaming_providers": providers,
+    }
+    _cache_set(key, payload)
+    return payload

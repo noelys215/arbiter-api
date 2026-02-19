@@ -19,6 +19,9 @@ class TitleOut(BaseModel):
     runtime_minutes: int | None = None
     tmdb_genres: list[str] = Field(default_factory=list)
     tmdb_genre_ids: list[int] = Field(default_factory=list)
+    tmdb_streaming_options: list[dict[str, str | None]] = Field(default_factory=list)
+    tmdb_streaming_providers: list[str] = Field(default_factory=list)
+    tmdb_streaming_link: str | None = None
 
 
 class AddWatchlistTMDB(BaseModel):

@@ -21,7 +21,7 @@ from app.schemas.sessions import (
 )
 from app.schemas.tonight_constraints import TonightConstraints
 from app.schemas.watchlist import TitleOut
-from app.services.tmdb import fetch_tmdb_title_taxonomy
+from app.services.tmdb import fetch_tmdb_title_taxonomy, fetch_tmdb_watch_providers
 from app.services.sessions import (
     cast_vote,
     create_tonight_session,
@@ -33,9 +33,12 @@ from app.services.sessions import (
 router = APIRouter(tags=["sessions"])
 
 
-async def _title_out_with_taxonomy(t) -> TitleOut:
+async def _title_out_with_taxonomy(t, *, include_streaming: bool = False) -> TitleOut:
     tmdb_genres: list[str] = []
     tmdb_genre_ids: list[int] = []
+    tmdb_streaming_options: list[dict[str, str | None]] = []
+    tmdb_streaming_providers: list[str] = []
+    tmdb_streaming_link: str | None = None
     if t.source == "tmdb" and t.source_id:
         try:
             tmdb_id = int(t.source_id)
@@ -49,6 +52,39 @@ async def _title_out_with_taxonomy(t) -> TitleOut:
             tmdb_genres = sorted(genres)
             tmdb_genre_ids = sorted(genre_ids)
 
+            if include_streaming:
+                providers_payload = await fetch_tmdb_watch_providers(
+                    tmdb_id=tmdb_id,
+                    media_type=t.media_type,
+                )
+
+                rows = providers_payload.get("streaming_providers", [])
+                if isinstance(rows, list):
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        provider_name = row.get("provider_name")
+                        if not isinstance(provider_name, str) or not provider_name.strip():
+                            continue
+                        streaming_url = row.get("streaming_url")
+                        tmdb_streaming_options.append(
+                            {
+                                "provider_name": provider_name.strip(),
+                                "streaming_url": (
+                                    streaming_url.strip()
+                                    if isinstance(streaming_url, str) and streaming_url.strip()
+                                    else None
+                                ),
+                            }
+                        )
+
+                    tmdb_streaming_providers = [
+                        row["provider_name"] for row in tmdb_streaming_options
+                    ]
+                link = providers_payload.get("link")
+                if isinstance(link, str) and link.strip():
+                    tmdb_streaming_link = link
+
     return TitleOut(
         id=t.id,
         source=t.source,
@@ -61,16 +97,19 @@ async def _title_out_with_taxonomy(t) -> TitleOut:
         runtime_minutes=t.runtime_minutes,
         tmdb_genres=tmdb_genres,
         tmdb_genre_ids=tmdb_genre_ids,
+        tmdb_streaming_options=tmdb_streaming_options,
+        tmdb_streaming_providers=tmdb_streaming_providers,
+        tmdb_streaming_link=tmdb_streaming_link,
     )
 
 
-async def _candidate_out(c) -> SessionCandidateOut:
+async def _candidate_out(c, *, include_streaming: bool = False) -> SessionCandidateOut:
     t = c.watchlist_item.title
     return SessionCandidateOut(
         watchlist_item_id=c.watchlist_item_id,
         position=c.position,
         reason=c.ai_note,
-        title=await _title_out_with_taxonomy(t),
+        title=await _title_out_with_taxonomy(t, include_streaming=include_streaming),
     )
 
 
@@ -192,6 +231,7 @@ async def session_state_route(
         await db.commit()
         s = view.session
         candidates = sorted(view.candidates, key=lambda x: x.position)
+        winner_item_id = s.result_watchlist_item_id
         return SessionStateResponse(
             session_id=s.id,
             status=s.status,
@@ -207,7 +247,17 @@ async def session_state_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
+            candidates=await asyncio.gather(
+                *[
+                    _candidate_out(
+                        c,
+                        include_streaming=bool(
+                            winner_item_id and c.watchlist_item_id == winner_item_id
+                        ),
+                    )
+                    for c in candidates
+                ]
+            ),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -229,6 +279,7 @@ async def shuffle_route(
         await db.commit()
         s = view.session
         candidates = sorted(view.candidates, key=lambda x: x.position)
+        winner_item_id = s.result_watchlist_item_id
         return SessionStateResponse(
             session_id=s.id,
             status=s.status,
@@ -244,7 +295,17 @@ async def shuffle_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
+            candidates=await asyncio.gather(
+                *[
+                    _candidate_out(
+                        c,
+                        include_streaming=bool(
+                            winner_item_id and c.watchlist_item_id == winner_item_id
+                        ),
+                    )
+                    for c in candidates
+                ]
+            ),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -266,6 +327,7 @@ async def end_session_route(
         await db.commit()
         s = view.session
         candidates = sorted(view.candidates, key=lambda x: x.position)
+        winner_item_id = s.result_watchlist_item_id
         return SessionStateResponse(
             session_id=s.id,
             status=s.status,
@@ -281,7 +343,17 @@ async def end_session_route(
             result_watchlist_item_id=s.result_watchlist_item_id,
             mutual_candidate_ids=view.mutual_candidate_ids,
             shortlist=view.shortlist,
-            candidates=await asyncio.gather(*[_candidate_out(c) for c in candidates]),
+            candidates=await asyncio.gather(
+                *[
+                    _candidate_out(
+                        c,
+                        include_streaming=bool(
+                            winner_item_id and c.watchlist_item_id == winner_item_id
+                        ),
+                    )
+                    for c in candidates
+                ]
+            ),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
