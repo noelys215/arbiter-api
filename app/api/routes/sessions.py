@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
-from app.models.tonight_session_candidate import TonightSessionCandidate
+from app.api.http_errors import permission_error, value_error
+from app.api.presenters.titles import build_title_out_with_taxonomy
 from app.models.watchlist_item import WatchlistItem
 from app.models.user import User
 from app.schemas.sessions import (
@@ -18,89 +19,24 @@ from app.schemas.sessions import (
     SessionCandidateOut,
     SessionStateResponse,
     VoteRequest,
+    WatchPartyUpdateRequest,
 )
 from app.schemas.tonight_constraints import TonightConstraints
-from app.schemas.watchlist import TitleOut
-from app.services.tmdb import fetch_tmdb_title_taxonomy, fetch_tmdb_watch_providers
 from app.services.sessions import (
     cast_vote,
     create_tonight_session,
     end_session,
     get_session_state,
+    set_session_watch_party_url,
     shuffle_and_complete,
 )
 
 router = APIRouter(tags=["sessions"])
 
 
-async def _title_out_with_taxonomy(t, *, include_streaming: bool = False) -> TitleOut:
-    tmdb_genres: list[str] = []
-    tmdb_genre_ids: list[int] = []
-    tmdb_streaming_options: list[dict[str, str | None]] = []
-    tmdb_streaming_providers: list[str] = []
-    tmdb_streaming_link: str | None = None
-    if t.source == "tmdb" and t.source_id:
-        try:
-            tmdb_id = int(t.source_id)
-        except (TypeError, ValueError):
-            tmdb_id = None
-        if tmdb_id is not None:
-            genres, _, genre_ids = await fetch_tmdb_title_taxonomy(
-                tmdb_id=tmdb_id,
-                media_type=t.media_type,
-            )
-            tmdb_genres = sorted(genres)
-            tmdb_genre_ids = sorted(genre_ids)
-
-            if include_streaming:
-                providers_payload = await fetch_tmdb_watch_providers(
-                    tmdb_id=tmdb_id,
-                    media_type=t.media_type,
-                )
-
-                rows = providers_payload.get("streaming_providers", [])
-                if isinstance(rows, list):
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            continue
-                        provider_name = row.get("provider_name")
-                        if not isinstance(provider_name, str) or not provider_name.strip():
-                            continue
-                        streaming_url = row.get("streaming_url")
-                        tmdb_streaming_options.append(
-                            {
-                                "provider_name": provider_name.strip(),
-                                "streaming_url": (
-                                    streaming_url.strip()
-                                    if isinstance(streaming_url, str) and streaming_url.strip()
-                                    else None
-                                ),
-                            }
-                        )
-
-                    tmdb_streaming_providers = [
-                        row["provider_name"] for row in tmdb_streaming_options
-                    ]
-                link = providers_payload.get("link")
-                if isinstance(link, str) and link.strip():
-                    tmdb_streaming_link = link
-
-    return TitleOut(
-        id=t.id,
-        source=t.source,
-        source_id=t.source_id,
-        media_type=t.media_type,
-        name=t.name,
-        release_year=t.release_year,
-        poster_path=t.poster_path,
-        overview=t.overview,
-        runtime_minutes=t.runtime_minutes,
-        tmdb_genres=tmdb_genres,
-        tmdb_genre_ids=tmdb_genre_ids,
-        tmdb_streaming_options=tmdb_streaming_options,
-        tmdb_streaming_providers=tmdb_streaming_providers,
-        tmdb_streaming_link=tmdb_streaming_link,
-    )
+def _session_value_error(exc: ValueError, *, include_not_found: bool = False):
+    phrase_statuses = {"not found": 404} if include_not_found else None
+    return value_error(exc, phrase_statuses=phrase_statuses)
 
 
 async def _candidate_out(c, *, include_streaming: bool = False) -> SessionCandidateOut:
@@ -109,7 +45,44 @@ async def _candidate_out(c, *, include_streaming: bool = False) -> SessionCandid
         watchlist_item_id=c.watchlist_item_id,
         position=c.position,
         reason=c.ai_note,
-        title=await _title_out_with_taxonomy(t, include_streaming=include_streaming),
+        title=await build_title_out_with_taxonomy(t, include_streaming=include_streaming),
+    )
+
+
+async def _session_state_response_from_view(view) -> SessionStateResponse:
+    s = view.session
+    candidates = sorted(view.candidates, key=lambda row: row.position)
+    winner_item_id = s.result_watchlist_item_id
+
+    return SessionStateResponse(
+        session_id=s.id,
+        status=s.status,
+        phase=view.phase,
+        round=view.round,
+        user_locked=view.user_locked,
+        user_seconds_left=view.user_seconds_left,
+        tie_break_required=view.tie_break_required,
+        tie_break_candidate_ids=view.tie_break_candidate_ids,
+        ended_by_leader=view.ended_by_leader,
+        ends_at=s.ends_at,
+        completed_at=s.completed_at,
+        result_watchlist_item_id=s.result_watchlist_item_id,
+        watch_party_url=s.watch_party_url,
+        watch_party_set_at=s.watch_party_set_at,
+        watch_party_set_by_user_id=s.watch_party_set_by_user_id,
+        mutual_candidate_ids=view.mutual_candidate_ids,
+        shortlist=view.shortlist,
+        candidates=await asyncio.gather(
+            *[
+                _candidate_out(
+                    c,
+                    include_streaming=bool(
+                        winner_item_id and c.watchlist_item_id == winner_item_id
+                    ),
+                )
+                for c in candidates
+            ]
+        ),
     )
 
 
@@ -145,7 +118,7 @@ async def create_session_route(
                     watchlist_item_id=wi.id,
                     position=c.position,
                     reason=c.ai_note,
-                    title=await _title_out_with_taxonomy(t),
+                    title=await build_title_out_with_taxonomy(t),
                 )
             )
 
@@ -168,7 +141,7 @@ async def create_session_route(
                         watchlist_item_id=wi.id,
                         position=pos,
                         reason=None,
-                        title=await _title_out_with_taxonomy(t),
+                        title=await build_title_out_with_taxonomy(t),
                     )
                 )
 
@@ -190,9 +163,9 @@ async def create_session_route(
         )
 
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise value_error(e) from e
 
 @router.post("/sessions/{session_id}/vote", status_code=200)
 async def vote_route(
@@ -212,12 +185,9 @@ async def vote_route(
         await db.commit()
         return {"ok": True}
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
-        msg = str(e).lower()
-        if "not found" in msg:
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _session_value_error(e, include_not_found=True) from e
 
 
 @router.get("/sessions/{session_id}", response_model=SessionStateResponse)
@@ -229,43 +199,11 @@ async def session_state_route(
     try:
         view = await get_session_state(db, session_id=session_id, user_id=user.id)
         await db.commit()
-        s = view.session
-        candidates = sorted(view.candidates, key=lambda x: x.position)
-        winner_item_id = s.result_watchlist_item_id
-        return SessionStateResponse(
-            session_id=s.id,
-            status=s.status,
-            phase=view.phase,
-            round=view.round,
-            user_locked=view.user_locked,
-            user_seconds_left=view.user_seconds_left,
-            tie_break_required=view.tie_break_required,
-            tie_break_candidate_ids=view.tie_break_candidate_ids,
-            ended_by_leader=view.ended_by_leader,
-            ends_at=s.ends_at,
-            completed_at=s.completed_at,
-            result_watchlist_item_id=s.result_watchlist_item_id,
-            mutual_candidate_ids=view.mutual_candidate_ids,
-            shortlist=view.shortlist,
-            candidates=await asyncio.gather(
-                *[
-                    _candidate_out(
-                        c,
-                        include_streaming=bool(
-                            winner_item_id and c.watchlist_item_id == winner_item_id
-                        ),
-                    )
-                    for c in candidates
-                ]
-            ),
-        )
+        return await _session_state_response_from_view(view)
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
-        msg = str(e).lower()
-        if "not found" in msg:
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _session_value_error(e, include_not_found=True) from e
 
 
 @router.post("/sessions/{session_id}/shuffle", response_model=SessionStateResponse, status_code=200)
@@ -277,43 +215,11 @@ async def shuffle_route(
     try:
         view = await shuffle_and_complete(db, session_id=session_id, user_id=user.id)
         await db.commit()
-        s = view.session
-        candidates = sorted(view.candidates, key=lambda x: x.position)
-        winner_item_id = s.result_watchlist_item_id
-        return SessionStateResponse(
-            session_id=s.id,
-            status=s.status,
-            phase=view.phase,
-            round=view.round,
-            user_locked=view.user_locked,
-            user_seconds_left=view.user_seconds_left,
-            tie_break_required=view.tie_break_required,
-            tie_break_candidate_ids=view.tie_break_candidate_ids,
-            ended_by_leader=view.ended_by_leader,
-            ends_at=s.ends_at,
-            completed_at=s.completed_at,
-            result_watchlist_item_id=s.result_watchlist_item_id,
-            mutual_candidate_ids=view.mutual_candidate_ids,
-            shortlist=view.shortlist,
-            candidates=await asyncio.gather(
-                *[
-                    _candidate_out(
-                        c,
-                        include_streaming=bool(
-                            winner_item_id and c.watchlist_item_id == winner_item_id
-                        ),
-                    )
-                    for c in candidates
-                ]
-            ),
-        )
+        return await _session_state_response_from_view(view)
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
-        msg = str(e).lower()
-        if "not found" in msg:
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _session_value_error(e, include_not_found=True) from e
 
 
 @router.post("/sessions/{session_id}/end", response_model=SessionStateResponse, status_code=200)
@@ -325,40 +231,30 @@ async def end_session_route(
     try:
         view = await end_session(db, session_id=session_id, user_id=user.id)
         await db.commit()
-        s = view.session
-        candidates = sorted(view.candidates, key=lambda x: x.position)
-        winner_item_id = s.result_watchlist_item_id
-        return SessionStateResponse(
-            session_id=s.id,
-            status=s.status,
-            phase=view.phase,
-            round=view.round,
-            user_locked=view.user_locked,
-            user_seconds_left=view.user_seconds_left,
-            tie_break_required=view.tie_break_required,
-            tie_break_candidate_ids=view.tie_break_candidate_ids,
-            ended_by_leader=view.ended_by_leader,
-            ends_at=s.ends_at,
-            completed_at=s.completed_at,
-            result_watchlist_item_id=s.result_watchlist_item_id,
-            mutual_candidate_ids=view.mutual_candidate_ids,
-            shortlist=view.shortlist,
-            candidates=await asyncio.gather(
-                *[
-                    _candidate_out(
-                        c,
-                        include_streaming=bool(
-                            winner_item_id and c.watchlist_item_id == winner_item_id
-                        ),
-                    )
-                    for c in candidates
-                ]
-            ),
-        )
+        return await _session_state_response_from_view(view)
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
-        msg = str(e).lower()
-        if "not found" in msg:
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _session_value_error(e, include_not_found=True) from e
+
+
+@router.patch("/sessions/{session_id}/watch-party", response_model=SessionStateResponse, status_code=200)
+async def update_watch_party_route(
+    session_id: UUID,
+    payload: WatchPartyUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        view = await set_session_watch_party_url(
+            db,
+            session_id=session_id,
+            user_id=user.id,
+            url=payload.url,
+        )
+        await db.commit()
+        return await _session_state_response_from_view(view)
+    except PermissionError as e:
+        raise permission_error(e) from e
+    except ValueError as e:
+        raise _session_value_error(e, include_not_found=True) from e

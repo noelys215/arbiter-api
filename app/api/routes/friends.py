@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.api.http_errors import value_error
 from app.models.user import User
 from app.schemas.friends import (
     FriendInviteCreateResponse,
@@ -40,15 +41,22 @@ async def accept_invite(
         return FriendAcceptResponse(ok=True)
     except ValueError as e:
         await db.rollback()
-        code = str(e)
-        mapping = {
-            "invalid_code": (404, "Invalid invite code"),
-            "expired_code": (410, "Invite code expired"),
-            "used_code": (409, "Invite code already used"),
-            "cannot_friend_self": (400, "You cannot friend yourself"),
-        }
-        status, msg = mapping.get(code, (400, "Could not accept invite"))
-        raise HTTPException(status_code=status, detail=msg)
+        raise value_error(
+            e,
+            code_statuses={
+                "invalid_code": 404,
+                "expired_code": 410,
+                "used_code": 409,
+                "cannot_friend_self": 400,
+            },
+            detail_overrides={
+                "invalid_code": "Invalid invite code",
+                "expired_code": "Invite code expired",
+                "used_code": "Invite code already used",
+                "cannot_friend_self": "You cannot friend yourself",
+            },
+            default_detail="Could not accept invite",
+        ) from e
 
 
 @router.get("", response_model=list[FriendListItem])
@@ -81,10 +89,15 @@ async def unfriend_route(
         return UnfriendResponse(ok=True, removed=True)
     except ValueError as e:
         await db.rollback()
-        code = str(e)
-        mapping = {
-            "not_found": (404, "Friendship not found"),
-            "cannot_unfriend_self": (400, "You cannot unfriend yourself"),
-        }
-        status, msg = mapping.get(code, (400, "Could not unfriend user"))
-        raise HTTPException(status_code=status, detail=msg)
+        raise value_error(
+            e,
+            code_statuses={
+                "not_found": 404,
+                "cannot_unfriend_self": 400,
+            },
+            detail_overrides={
+                "not_found": "Friendship not found",
+                "cannot_unfriend_self": "You cannot unfriend yourself",
+            },
+            default_detail="Could not unfriend user",
+        ) from e

@@ -29,6 +29,12 @@ from app.api.routes.sessions import router as sessions_router
 
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
+local_cors_origin_regex = (
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    if settings.env in {"local", "test"}
+    else None
+)
+
 @app.exception_handler(Exception)
 async def debug_exception_handler(request: Request, exc: Exception):
     return PlainTextResponse("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), status_code=500)
@@ -44,6 +50,7 @@ if SessionMiddleware is not None:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list(),
+    allow_origin_regex=local_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

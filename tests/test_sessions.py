@@ -22,6 +22,219 @@ async def test_create_session_requires_membership(async_client, user_factory, lo
 
 
 @pytest.mark.anyio
+async def test_group_leader_can_set_watch_party_link_and_members_can_read(
+    async_client,
+    user_factory,
+    login_helper,
+):
+    leader = await user_factory(async_client, display_name="Leader")
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
+    code = invite["code"]
+
+    member = await user_factory(async_client, display_name="Member")
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    accept = await async_client.post("/groups/accept-invite", json={"code": code})
+    assert accept.status_code == 200, accept.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    for tmdb_id, title in ((101, "A"), (102, "B")):
+        add = await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": tmdb_id,
+                "media_type": "movie",
+                "title": title,
+                "year": 2000,
+                "poster_path": None,
+            },
+        )
+        assert add.status_code == 201, add.text
+
+    session = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert session.status_code == 201, session.text
+    session_id = session.json()["session_id"]
+
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    member_join = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert member_join.status_code == 201, member_join.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    shuffled = await async_client.post(f"/sessions/{session_id}/shuffle")
+    assert shuffled.status_code == 200, shuffled.text
+    assert shuffled.json()["result_watchlist_item_id"] is not None
+
+    party_url = "https://www.teleparty.com/join/abc123xyz"
+    set_link = await async_client.patch(
+        f"/sessions/{session_id}/watch-party",
+        json={"url": party_url},
+    )
+    assert set_link.status_code == 200, set_link.text
+    assert set_link.json()["watch_party_url"] == party_url
+
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    state = await async_client.get(f"/sessions/{session_id}")
+    assert state.status_code == 200, state.text
+    assert state.json()["watch_party_url"] == party_url
+
+
+@pytest.mark.anyio
+async def test_non_leader_cannot_set_watch_party_link(
+    async_client,
+    user_factory,
+    login_helper,
+):
+    leader = await user_factory(async_client, display_name="Leader")
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
+    code = invite["code"]
+
+    member = await user_factory(async_client, display_name="Member")
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    accept = await async_client.post("/groups/accept-invite", json={"code": code})
+    assert accept.status_code == 200, accept.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    for tmdb_id, title in ((103, "C"), (104, "D")):
+        add = await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": tmdb_id,
+                "media_type": "movie",
+                "title": title,
+                "year": 2000,
+                "poster_path": None,
+            },
+        )
+        assert add.status_code == 201, add.text
+
+    session = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert session.status_code == 201, session.text
+    session_id = session.json()["session_id"]
+
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    member_join = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert member_join.status_code == 201, member_join.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    shuffled = await async_client.post(f"/sessions/{session_id}/shuffle")
+    assert shuffled.status_code == 200, shuffled.text
+
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    set_link = await async_client.patch(
+        f"/sessions/{session_id}/watch-party",
+        json={"url": "https://www.teleparty.com/join/should-fail"},
+    )
+    assert set_link.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_group_leader_can_set_non_join_teleparty_link(
+    async_client,
+    user_factory,
+    login_helper,
+):
+    leader = await user_factory(async_client, display_name="Leader")
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
+    code = invite["code"]
+
+    member = await user_factory(async_client, display_name="Member")
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    accept = await async_client.post("/groups/accept-invite", json={"code": code})
+    assert accept.status_code == 200, accept.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    for tmdb_id, title in ((105, "E"), (106, "F")):
+        add = await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": tmdb_id,
+                "media_type": "movie",
+                "title": title,
+                "year": 2000,
+                "poster_path": None,
+            },
+        )
+        assert add.status_code == 201, add.text
+
+    session = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert session.status_code == 201, session.text
+    session_id = session.json()["session_id"]
+
+    await login_helper(async_client, email=member["email"], password=member["password"])
+    member_join = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {"moods": ["cozy"]},
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert member_join.status_code == 201, member_join.text
+
+    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    shuffled = await async_client.post(f"/sessions/{session_id}/shuffle")
+    assert shuffled.status_code == 200, shuffled.text
+    assert shuffled.json()["result_watchlist_item_id"] is not None
+
+    party_url = "https://www.teleparty.com/party/abc123xyz"
+    set_link = await async_client.patch(
+        f"/sessions/{session_id}/watch-party",
+        json={"url": party_url},
+    )
+    assert set_link.status_code == 200, set_link.text
+    assert set_link.json()["watch_party_url"] == party_url
+
+
+@pytest.mark.anyio
 async def test_create_session_freezes_deck_and_returns_order(async_client, monkeypatch, user_factory, login_helper):
     # Patch AI so it deterministically reorders candidates
     from app.services import sessions as sessions_service

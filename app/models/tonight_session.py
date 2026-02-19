@@ -63,7 +63,11 @@ class TonightSession(Base):
     # Relationships (future phases)
     # ─────────────────────────────────────────────
     group = relationship("Group", lazy="joined")
-    created_by = relationship("User", lazy="joined")
+    created_by = relationship(
+        "User",
+        lazy="joined",
+        foreign_keys=[created_by_user_id],
+    )
 
     # These will come in Phase 5.2+
     # votes = relationship("TonightVote", back_populates="session")
@@ -95,5 +99,21 @@ class TonightSession(Base):
     )
 
     result_watchlist_item = relationship("WatchlistItem", lazy="joined", foreign_keys=[result_watchlist_item_id])
+
+    watch_party_url: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    watch_party_set_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    watch_party_set_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    watch_party_set_by = relationship(
+        "User",
+        lazy="joined",
+        foreign_keys=[watch_party_set_by_user_id],
+    )
 
     votes = relationship("TonightVote", back_populates="session")

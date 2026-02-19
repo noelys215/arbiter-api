@@ -1,3 +1,5 @@
+import json
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -35,6 +37,37 @@ class Settings(BaseSettings):
     oauth_session_secret: str | None = Field(default=None, alias="OAUTH_SESSION_SECRET")
 
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        raw = (self.cors_origins or "").strip()
+        if not raw:
+            return []
+
+        values: list[str]
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                values = [str(v) for v in parsed if isinstance(v, str)]
+            else:
+                values = [raw]
+        else:
+            values = raw.split(",")
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = value.strip().strip("\"'")
+            if not cleaned:
+                continue
+            # CORS origins are scheme + host (+ optional port) with no path slash.
+            if cleaned != "*" and cleaned.endswith("/"):
+                cleaned = cleaned.rstrip("/")
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+
+        return normalized
 
 settings = Settings()

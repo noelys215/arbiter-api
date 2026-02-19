@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import sqlalchemy as sa
 from sqlalchemy import select
@@ -659,6 +660,7 @@ def _deterministic_shuffle(items: list[WatchlistItem], seed: int) -> list[Watchl
 
 SESSION_RUNTIME_KEY = "__session_runtime_v1"
 ROUND_TIMER_SECONDS = 60
+WATCH_PARTY_ALLOWED_HOSTS = ("teleparty.com", "netflixparty.com")
 
 
 @dataclass
@@ -713,6 +715,29 @@ def _parse_uuid_list(values: Any) -> list[uuid.UUID]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _normalize_watch_party_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("watch party URL must use http or https")
+    if not parsed.netloc:
+        raise ValueError("watch party URL must include a host")
+
+    host = parsed.netloc.split("@")[-1].split(":")[0].lower().strip(".")
+    if not host or not any(
+        host == allowed or host.endswith(f".{allowed}")
+        for allowed in WATCH_PARTY_ALLOWED_HOSTS
+    ):
+        raise ValueError("watch party URL must be a Teleparty link")
+
+    return cleaned
 
 
 def _session_base_candidate_ids(s: TonightSession) -> list[uuid.UUID]:
@@ -1789,6 +1814,35 @@ async def end_session(db: AsyncSession, *, session_id: uuid.UUID, user_id: uuid.
         runtime["ended_by_leader"] = True
         _persist_runtime(s, runtime)
         await db.flush()
+    return await _build_session_state_view(db, s=s, user_id=user_id, now=now)
+
+
+async def set_session_watch_party_url(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_id: uuid.UUID,
+    url: str | None,
+) -> SessionStateView:
+    s = await _load_session_with_candidates(db, session_id)
+    await assert_user_in_group(db, s.group_id, user_id)
+    if s.group.owner_id != user_id:
+        raise PermissionError("Only the group leader can set the Teleparty link")
+
+    normalized = _normalize_watch_party_url(url)
+    if normalized and s.result_watchlist_item_id is None:
+        raise ValueError("Pick a winner before sharing a Teleparty link")
+
+    now = datetime.now(timezone.utc)
+    s.watch_party_url = normalized
+    if normalized:
+        s.watch_party_set_at = now
+        s.watch_party_set_by_user_id = user_id
+    else:
+        s.watch_party_set_at = None
+        s.watch_party_set_by_user_id = None
+
+    await db.flush()
     return await _build_session_state_view(db, s=s, user_id=user_id, now=now)
 
 

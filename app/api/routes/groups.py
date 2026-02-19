@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
+from app.api.http_errors import permission_error, value_error
 from app.models.user import User
 from app.schemas.groups import (
     CreateGroupRequest,
@@ -48,7 +49,7 @@ async def create_group_route(
             member_count=1 + len({uid for uid in payload.member_user_ids if uid != user.id}),
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise value_error(e) from e
 
 
 @router.get("", response_model=list[GroupListItem])
@@ -85,7 +86,7 @@ async def group_detail_route(
             ],
         )
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
 
 
 @router.post("/{group_id}/invite", response_model=GroupInviteResponse, status_code=201)
@@ -103,7 +104,7 @@ async def create_group_invite_route(
             uses_count=inv.uses_count,
         )
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
 
 
 @router.post("/accept-invite", status_code=200)
@@ -116,14 +117,14 @@ async def accept_group_invite_route(
         await accept_group_invite(db, user.id, payload.code)
         return {"ok": True}
     except ValueError as e:
-        msg = str(e).lower()
-        if "invalid" in msg:
-            raise HTTPException(status_code=404, detail=str(e))
-        if "expired" in msg:
-            raise HTTPException(status_code=410, detail=str(e))
-        if "used" in msg:
-            raise HTTPException(status_code=409, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise value_error(
+            e,
+            phrase_statuses={
+                "invalid": 404,
+                "expired": 410,
+                "used": 409,
+            },
+        ) from e
 
 
 @router.post("/{group_id}/leave", response_model=LeaveGroupResponse, status_code=200)
@@ -138,13 +139,16 @@ async def leave_group_route(
         return LeaveGroupResponse(ok=True)
     except PermissionError as e:
         await db.rollback()
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
         await db.rollback()
-        msg = str(e).lower()
-        if "owner_cannot_leave" in msg:
-            raise HTTPException(status_code=400, detail="Group owner cannot leave their own group")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise value_error(
+            e,
+            phrase_statuses={"owner_cannot_leave": 400},
+            detail_overrides={
+                "owner_cannot_leave": "Group owner cannot leave their own group"
+            },
+        ) from e
 
 
 @router.delete("/{group_id}", response_model=DeleteGroupResponse, status_code=200)
@@ -159,12 +163,14 @@ async def delete_group_route(
         return DeleteGroupResponse(ok=True)
     except PermissionError as e:
         await db.rollback()
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
         await db.rollback()
-        if str(e) == "not_found":
-            raise HTTPException(status_code=404, detail="Group not found")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise value_error(
+            e,
+            code_statuses={"not_found": 404},
+            detail_overrides={"not_found": "Group not found"},
+        ) from e
 
 
 @router.post("/{group_id}/members", response_model=AddGroupMembersResponse, status_code=200)
@@ -185,10 +191,11 @@ async def add_group_members_route(
         return AddGroupMembersResponse(ok=True, added_user_ids=added, skipped_user_ids=skipped)
     except PermissionError as e:
         await db.rollback()
-        raise HTTPException(status_code=403, detail=str(e))
+        raise permission_error(e) from e
     except ValueError as e:
         await db.rollback()
-        if str(e) == "not_found":
-            raise HTTPException(status_code=404, detail="Group not found")
-        raise HTTPException(status_code=400, detail=str(e))
-
+        raise value_error(
+            e,
+            code_statuses={"not_found": 404},
+            detail_overrides={"not_found": "Group not found"},
+        ) from e
