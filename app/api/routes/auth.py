@@ -10,15 +10,28 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    create_magic_link_token,
+    decode_magic_link_token,
+    hash_password,
+    verify_password,
+)
 from app.db.session import get_db_session
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    MagicLinkRequest,
+    MagicLinkRequestResponse,
     LogoutResponse,
     RegisterRequest,
     RegisterResponse,
+)
+from app.services.magic_link_email import (
+    build_magic_link,
+    magic_link_email_configured,
+    send_magic_link_email,
 )
 from app.services.oauth import get_oauth_client, oauth_error_cls
 
@@ -135,6 +148,13 @@ def _extract_avatar_url(payload: dict[str, object]) -> str | None:
     return None
 
 
+def _default_display_name_from_email(email: str) -> str:
+    local_part = email.split("@", 1)[0].strip()
+    if not local_part:
+        return "User"
+    return local_part[:120]
+
+
 async def _username_exists(db: AsyncSession, username: str) -> bool:
     result = await db.execute(select(User.id).where(User.username == username))
     return result.scalar_one_or_none() is not None
@@ -197,6 +217,59 @@ async def _upsert_oauth_user(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+@router.post("/magic-link/request", response_model=MagicLinkRequestResponse)
+async def request_magic_link(payload: MagicLinkRequest):
+    if not magic_link_email_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Magic link email is not configured",
+        )
+
+    normalized_email = payload.email.strip().lower()
+    token = create_magic_link_token(normalized_email)
+    magic_link_url = build_magic_link(token)
+    try:
+        await send_magic_link_email(to_email=normalized_email, magic_link_url=magic_link_url)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send magic link",
+        )
+
+    return MagicLinkRequestResponse(ok=True)
+
+
+@router.get("/magic-link/verify")
+async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_session)):
+    email, token_error = decode_magic_link_token(token)
+    if token_error or not email:
+        reason = "magic_link_expired" if token_error == "expired" else "magic_link_invalid"
+        return _oauth_failure_redirect(reason)
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if user is None:
+        username = await _generate_unique_username(db, email.split("@", 1)[0])
+        user = User(
+            email=email,
+            username=username,
+            display_name=_default_display_name_from_email(email),
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    response = RedirectResponse(url=settings.oauth_frontend_success_url, status_code=status.HTTP_302_FOUND)
+    _set_auth_cookie(response, str(user.id))
+    return response
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
@@ -282,59 +355,6 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
 
     display_name = _clean_text(userinfo.get("name")) or email.split("@", 1)[0]
     avatar_url = _extract_avatar_url(userinfo)
-
-    user = await _upsert_oauth_user(
-        db,
-        email=email,
-        display_name=display_name,
-        avatar_url=avatar_url,
-    )
-
-    response = RedirectResponse(url=settings.oauth_frontend_success_url, status_code=status.HTTP_302_FOUND)
-    _set_auth_cookie(response, str(user.id))
-    return response
-
-
-@router.get("/facebook/login")
-async def facebook_login(request: Request):
-    client = _require_oauth_client("facebook")
-    _require_oauth_session(request)
-    return await client.authorize_redirect(request, settings.oauth_facebook_callback_url)
-
-
-@router.get("/facebook/callback")
-async def facebook_callback(request: Request, db: AsyncSession = Depends(get_db_session)):
-    client = _require_oauth_client("facebook")
-    _require_oauth_session(request)
-
-    try:
-        token = await client.authorize_access_token(request)
-        profile_response = await client.get(
-            "me",
-            token=token,
-            params={"fields": "id,name,email,picture.type(large)"},
-        )
-        if not profile_response.is_success:
-            return _oauth_failure_redirect("facebook_profile_failed")
-        profile = profile_response.json()
-        if not isinstance(profile, dict):
-            return _oauth_failure_redirect("facebook_profile_failed")
-    except oauth_error_cls:
-        return _oauth_failure_redirect("facebook_oauth_failed")
-    except Exception:
-        return _oauth_failure_redirect("facebook_oauth_failed")
-
-    email = _clean_email(profile.get("email"))
-    if not email:
-        return _oauth_failure_redirect("facebook_email_required")
-
-    display_name = _clean_text(profile.get("name")) or email.split("@", 1)[0]
-    picture = profile.get("picture")
-    avatar_url = None
-    if isinstance(picture, dict):
-        picture_data = picture.get("data")
-        if isinstance(picture_data, dict):
-            avatar_url = _clean_text(picture_data.get("url"))
 
     user = await _upsert_oauth_user(
         db,

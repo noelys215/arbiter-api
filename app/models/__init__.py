@@ -9,4 +9,3 @@ from app.models.watchlist_item import WatchlistItem  # noqa: F401
 from app.models.tonight_session_candidate import TonightSessionCandidate  # noqa: F401
 from .tonight_session import TonightSession  # noqa
 from app.models.tonight_vote import TonightVote
-

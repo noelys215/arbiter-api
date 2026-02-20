@@ -27,13 +27,14 @@ OPENAI_API_KEY=your_openai_key
 OPENAI_MODEL=gpt-5-mini
 OAUTH_GOOGLE_CLIENT_ID=
 OAUTH_GOOGLE_CLIENT_SECRET=
-OAUTH_FACEBOOK_CLIENT_ID=
-OAUTH_FACEBOOK_CLIENT_SECRET=
 OAUTH_GOOGLE_CALLBACK_URL=http://localhost:8000/auth/google/callback
-OAUTH_FACEBOOK_CALLBACK_URL=http://localhost:8000/auth/facebook/callback
 OAUTH_FRONTEND_SUCCESS_URL=http://localhost:5173/app
 OAUTH_FRONTEND_FAILURE_URL=http://localhost:5173/login
 OAUTH_SESSION_SECRET=
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Arbiter <no-reply@yourdomain.com>"
+MAGIC_LINK_VERIFY_URL=http://localhost:8000/auth/magic-link/verify
+MAGIC_LINK_EXPIRE_MINUTES=15
 ```
 
 4) Run migrations
@@ -103,9 +104,13 @@ The app uses cookie-based auth. `POST /auth/login` sets an `access_token` cookie
   - Creates a user. Rejects duplicate email/username.
 - `POST /auth/login`
   - Sets a signed JWT as `access_token` cookie.
-- `GET /auth/google/login` and `GET /auth/facebook/login`
+- `POST /auth/magic-link/request`
+  - Sends a one-time sign-in link through Resend.
+- `GET /auth/magic-link/verify?token=...`
+  - Validates token, creates user on first login, sets `access_token` cookie, redirects to frontend.
+- `GET /auth/google/login`
   - Starts OAuth redirect flow for social sign-in.
-- `GET /auth/google/callback` and `GET /auth/facebook/callback`
+- `GET /auth/google/callback`
   - Handles provider callback, creates/links a user, sets `access_token` cookie, redirects to frontend.
 - `POST /auth/logout`
   - Clears cookie.
@@ -220,13 +225,14 @@ Common optional vars:
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OAUTH_GOOGLE_CLIENT_ID`
 - `OAUTH_GOOGLE_CLIENT_SECRET`
-- `OAUTH_FACEBOOK_CLIENT_ID`
-- `OAUTH_FACEBOOK_CLIENT_SECRET`
 - `OAUTH_GOOGLE_CALLBACK_URL` (default `http://localhost:8000/auth/google/callback`)
-- `OAUTH_FACEBOOK_CALLBACK_URL` (default `http://localhost:8000/auth/facebook/callback`)
 - `OAUTH_FRONTEND_SUCCESS_URL` (default `http://localhost:5173/app`)
 - `OAUTH_FRONTEND_FAILURE_URL` (default `http://localhost:5173/login`)
 - `OAUTH_SESSION_SECRET` (falls back to `JWT_SECRET` if unset)
+- `RESEND_API_KEY`
+- `RESEND_FROM_EMAIL`
+- `MAGIC_LINK_VERIFY_URL` (default `http://localhost:8000/auth/magic-link/verify`)
+- `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
 
 ## Running tests
 

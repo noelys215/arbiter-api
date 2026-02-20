@@ -37,6 +37,14 @@ class LoginResponse(BaseModel):
     ok: bool
 
 
+class MagicLinkRequest(BaseModel):
+    email: EmailStr
+
+
+class MagicLinkRequestResponse(BaseModel):
+    ok: bool
+
+
 class LogoutResponse(BaseModel):
     ok: bool
 

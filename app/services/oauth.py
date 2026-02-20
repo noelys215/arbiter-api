@@ -46,17 +46,6 @@ def _ensure_clients_registered() -> None:
             client_kwargs={"scope": "openid email profile"},
         )
 
-    if _is_configured(settings.oauth_facebook_client_id, settings.oauth_facebook_client_secret):
-        _oauth.register(
-            name="facebook",
-            client_id=_clean(settings.oauth_facebook_client_id),
-            client_secret=_clean(settings.oauth_facebook_client_secret),
-            access_token_url="https://graph.facebook.com/v20.0/oauth/access_token",
-            authorize_url="https://www.facebook.com/v20.0/dialog/oauth",
-            api_base_url="https://graph.facebook.com/v20.0/",
-            client_kwargs={"scope": "email public_profile"},
-        )
-
     _registered = True
 
 

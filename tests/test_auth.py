@@ -27,7 +27,7 @@ async def test_social_oauth_endpoints_require_provider_config(client):
     facebook = await client.get("/auth/facebook/login")
 
     assert google.status_code == 503
-    assert facebook.status_code == 503
+    assert facebook.status_code == 404
 
 
 async def test_logout_revokes_auth_cookie(client, user_factory, login_helper):
@@ -95,3 +95,53 @@ async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monk
     me = await client.get("/me")
     assert me.status_code == 200, me.text
     assert me.json()["avatar_url"] == "https://example.com/google-avatar.png"
+
+
+async def test_magic_link_request_sends_email_when_configured(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    sent_payload: dict[str, str] = {}
+
+    async def _fake_send_magic_link_email(*, to_email: str, magic_link_url: str):
+        sent_payload["to_email"] = to_email
+        sent_payload["magic_link_url"] = magic_link_url
+
+    monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(auth_routes.settings, "resend_from_email", "Arbiter <no-reply@example.com>")
+    monkeypatch.setattr(
+        auth_routes.settings,
+        "magic_link_verify_url",
+        "http://localhost:8000/auth/magic-link/verify",
+    )
+    monkeypatch.setattr(auth_routes, "send_magic_link_email", _fake_send_magic_link_email)
+
+    response = await client.post(
+        "/auth/magic-link/request",
+        json={"email": "magic@example.com"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True}
+    assert sent_payload["to_email"] == "magic@example.com"
+    assert sent_payload["magic_link_url"].startswith(
+        "http://localhost:8000/auth/magic-link/verify?token="
+    )
+
+
+async def test_magic_link_verify_creates_user_and_authenticates(client):
+    from app.core.security import create_magic_link_token
+
+    token = create_magic_link_token("new.magic@example.com")
+    response = await client.get(f"/auth/magic-link/verify?token={token}", follow_redirects=False)
+    assert response.status_code == 302
+
+    me = await client.get("/me")
+    assert me.status_code == 200, me.text
+    data = me.json()
+    assert data["email"] == "new.magic@example.com"
+    assert data["username"]
+
+
+async def test_magic_link_verify_rejects_invalid_token(client):
+    response = await client.get("/auth/magic-link/verify?token=invalid", follow_redirects=False)
+    assert response.status_code == 302
+    assert "oauth_error=magic_link_invalid" in str(response.headers.get("location"))
