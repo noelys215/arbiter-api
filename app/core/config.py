@@ -1,7 +1,7 @@
 import json
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -43,6 +43,41 @@ class Settings(BaseSettings):
     oauth_frontend_success_url: str = Field(default="http://localhost:5173/app", alias="OAUTH_FRONTEND_SUCCESS_URL")
     oauth_frontend_failure_url: str = Field(default="http://localhost:5173/login", alias="OAUTH_FRONTEND_FAILURE_URL")
     oauth_session_secret: str | None = Field(default=None, alias="OAUTH_SESSION_SECRET")
+    auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
+    auth_cookie_secure: bool | None = Field(default=None, alias="AUTH_COOKIE_SECURE")
+    auth_cookie_domain: str | None = Field(default=None, alias="AUTH_COOKIE_DOMAIN")
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if cleaned.startswith("postgres://"):
+            cleaned = f"postgresql://{cleaned[len('postgres://'):]}"
+        if cleaned.startswith("postgresql://") and not cleaned.startswith("postgresql+"):
+            cleaned = cleaned.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return cleaned
+
+    @field_validator("auth_cookie_samesite", mode="before")
+    @classmethod
+    def normalize_auth_cookie_samesite(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return value.strip().lower()
+
+    @model_validator(mode="after")
+    def validate_cookie_settings(self) -> "Settings":
+        if self.auth_cookie_samesite not in {"lax", "strict", "none"}:
+            raise ValueError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
+        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure_value():
+            raise ValueError("AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true")
+        return self
+
+    def auth_cookie_secure_value(self) -> bool:
+        if self.auth_cookie_secure is not None:
+            return self.auth_cookie_secure
+        return self.env not in {"local", "test"}
 
     def cors_origin_list(self) -> list[str]:
         raw = (self.cors_origins or "").strip()

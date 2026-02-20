@@ -1,0 +1,60 @@
+databases:
+  - name: watchpicker-db
+    plan: basic-256mb
+    databaseName: watchpicker
+    user: watchpicker
+
+services:
+  - type: web
+    name: watchpicker-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    preDeployCommand: ./scripts/render_predeploy.sh
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: watchpicker-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "43200"
+      - key: AUTH_COOKIE_SAMESITE
+        value: none
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: TMDB_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: OAUTH_GOOGLE_CLIENT_ID
+        sync: false
+      - key: OAUTH_GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: OAUTH_GOOGLE_CALLBACK_URL
+        sync: false
+      - key: OAUTH_FRONTEND_SUCCESS_URL
+        sync: false
+      - key: OAUTH_FRONTEND_FAILURE_URL
+        sync: false
+      - key: OAUTH_SESSION_SECRET
+        generateValue: true
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: MAGIC_LINK_VERIFY_URL
+        sync: false
+      - key: MAGIC_LINK_EXPIRE_MINUTES
+        value: "15"

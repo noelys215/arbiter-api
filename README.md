@@ -4,9 +4,9 @@ FastAPI backend for a collaborative "what should we watch" experience. Users can
 
 ## Quick start
 
-1) Install dependencies (includes OAuth support)
+1) Install dependencies
 ```bash
-pip install authlib itsdangerous
+pip install -r requirements.txt
 ```
 
 2) Start Postgres
@@ -21,6 +21,8 @@ DATABASE_URL=postgresql+asyncpg://watchpicker:watchpicker@localhost:5432/watchpi
 JWT_SECRET=dev-secret
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=43200
+AUTH_COOKIE_SAMESITE=lax
+AUTH_COOKIE_SECURE=false
 CORS_ORIGINS=http://localhost:5173
 TMDB_TOKEN=your_tmdb_bearer_token
 OPENAI_API_KEY=your_openai_key
@@ -220,6 +222,9 @@ Common optional vars:
 - `ENV` (default `local`)
 - `JWT_ALGORITHM` (default `HS256`)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` (default 30 days)
+- `AUTH_COOKIE_SAMESITE` (`lax`, `strict`, or `none`; default `lax`)
+- `AUTH_COOKIE_SECURE` (`true`/`false`; defaults to `true` outside local/test)
+- `AUTH_COOKIE_DOMAIN` (optional cookie domain override)
 - `CORS_ORIGINS` (comma-separated)
 - `OPENAI_API_KEY` (optional)
 - `OPENAI_MODEL` (default `gpt-5-mini`)
@@ -233,6 +238,34 @@ Common optional vars:
 - `RESEND_FROM_EMAIL`
 - `MAGIC_LINK_VERIFY_URL` (default `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
+
+## Deploy on Render (no Docker required)
+
+Use the included `render.yaml` blueprint in the repo root.
+
+1) Push this backend repo and create a new Render Blueprint service from `render.yaml`.
+2) Render will provision:
+- Web service: `watchpicker-api`
+- Postgres: `watchpicker-db`
+3) Set the `sync: false` env vars in Render before first deploy:
+- `CORS_ORIGINS`: your frontend origin, e.g. `https://arbiter-web.onrender.com`
+- `TMDB_TOKEN`: TMDB bearer token
+- `OPENAI_API_KEY`: only if you want AI reranking/parsing
+- `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: required for magic-link emails
+- `MAGIC_LINK_VERIFY_URL`: where users click from email (backend verify URL or frontend verify route)
+- OAuth vars only if you are using Google OAuth
+4) Keep cookie settings for cross-domain frontend/API auth:
+- `AUTH_COOKIE_SAMESITE=none`
+- `AUTH_COOKIE_SECURE=true`
+5) Deploy. Render runs migrations automatically via `preDeployCommand`:
+```bash
+./scripts/render_predeploy.sh
+```
+
+Notes:
+- Docker is not required for this Render setup.
+- `DATABASE_URL` is auto-wired from the managed Postgres instance.
+- Health check endpoint is `GET /health`.
 
 ## Running tests
 

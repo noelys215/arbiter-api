@@ -1,6 +1,8 @@
 import app.db.base  # noqa: F401
 import app.models  # noqa: F401
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_mcp import FastApiMCP
@@ -27,6 +29,7 @@ from app.api.routes.watchlist import router as watchlist_router
 from app.api.routes.sessions import router as sessions_router
 
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
 local_cors_origin_regex = (
@@ -37,14 +40,20 @@ local_cors_origin_regex = (
 
 @app.exception_handler(Exception)
 async def debug_exception_handler(request: Request, exc: Exception):
-    return PlainTextResponse("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), status_code=500)
+    if settings.env in {"local", "test"}:
+        return PlainTextResponse(
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            status_code=500,
+        )
+    logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+    return PlainTextResponse("Internal Server Error", status_code=500)
 
 if SessionMiddleware is not None:
     app.add_middleware(
         SessionMiddleware,
         secret_key=(settings.oauth_session_secret or settings.jwt_secret),
-        same_site="lax",
-        https_only=settings.env not in {"local", "test"},
+        same_site=settings.auth_cookie_samesite,
+        https_only=settings.auth_cookie_secure_value(),
     )
 
 app.add_middleware(

@@ -44,12 +44,16 @@ _USERNAME_SAFE_RE = re.compile(r"[^a-z0-9_]+")
 
 
 def _auth_cookie_options() -> dict[str, object]:
-    return {
+    options: dict[str, object] = {
         "httponly": True,
-        "secure": settings.env not in {"local", "test"},
-        "samesite": "lax",
+        "secure": settings.auth_cookie_secure_value(),
+        "samesite": settings.auth_cookie_samesite,
         "path": "/",
     }
+    domain = (settings.auth_cookie_domain or "").strip()
+    if domain:
+        options["domain"] = domain
+    return options
 
 
 def _set_auth_cookie(response: Response, user_id: str) -> None:
@@ -86,6 +90,11 @@ def _oauth_failure_redirect(reason: str) -> RedirectResponse:
     separator = "&" if "?" in settings.oauth_frontend_failure_url else "?"
     destination = f"{settings.oauth_frontend_failure_url}{separator}oauth_error={quote_plus(reason)}"
     return RedirectResponse(url=destination, status_code=status.HTTP_302_FOUND)
+
+
+def _append_query_param(url: str, key: str, value: str) -> str:
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{key}={quote_plus(value)}"
 
 
 def _require_oauth_client(provider: str):
@@ -267,7 +276,12 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
         await db.commit()
         await db.refresh(user)
 
-    response = RedirectResponse(url=settings.oauth_frontend_success_url, status_code=status.HTTP_302_FOUND)
+    destination = _append_query_param(
+        settings.oauth_frontend_success_url,
+        "auth",
+        "magic-link",
+    )
+    response = RedirectResponse(url=destination, status_code=status.HTTP_302_FOUND)
     _set_auth_cookie(response, str(user.id))
     return response
 
