@@ -61,9 +61,6 @@ async def accept_friend_invite(db: AsyncSession, current_user_id, code: str) -> 
     if invite.expires_at <= now:
         raise ValueError("expired_code")
 
-    if invite.uses_count >= invite.max_uses:
-        raise ValueError("used_code")
-
     if str(invite.created_by_user_id) == str(current_user_id):
         raise ValueError("cannot_friend_self")
 
@@ -78,10 +75,15 @@ async def accept_friend_invite(db: AsyncSession, current_user_id, code: str) -> 
     ).scalar_one_or_none()
 
     if existing:
-        # still consume invite? I'd say yes, because it was used.
-        invite.uses_count += 1
-        await db.flush()
+        # Idempotent success if users are already friends.
+        # If the code is still unused, consume it once to preserve single-use behavior.
+        if invite.uses_count < invite.max_uses:
+            invite.uses_count += 1
+            await db.flush()
         return
+
+    if invite.uses_count >= invite.max_uses:
+        raise ValueError("used_code")
 
     db.add(Friendship(user_low_id=low, user_high_id=high))
     invite.uses_count += 1

@@ -68,3 +68,26 @@ async def test_cannot_accept_own_invite(client, user_factory, login_helper):
 
     r = await client.post("/friends/accept", json={"code": code})
     assert r.status_code in (400, 409)
+
+
+async def test_reaccept_same_invite_by_same_user_is_idempotent(
+    client,
+    client_factory,
+    user_factory,
+    login_helper,
+):
+    user_a = await user_factory(client, display_name="A3")
+    await login_helper(client, email=user_a["email"], password=user_a["password"])
+    create_invite = await client.post("/friends/invite")
+    assert create_invite.status_code in (200, 201), create_invite.text
+    code = create_invite.json()["code"]
+
+    async with client_factory() as client_b:
+        user_b = await user_factory(client_b, display_name="B3")
+        await login_helper(client_b, email=user_b["email"], password=user_b["password"])
+
+        first_accept = await client_b.post("/friends/accept", json={"code": code})
+        assert first_accept.status_code == 200, first_accept.text
+
+        second_accept = await client_b.post("/friends/accept", json={"code": code})
+        assert second_accept.status_code == 200, second_accept.text
