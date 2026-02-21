@@ -8,6 +8,7 @@ services:
   - type: web
     name: watchpicker-api
     runtime: python
+    rootDir: watch-picker-api
     plan: starter
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     preDeployCommand: ./scripts/render_predeploy.sh
@@ -26,6 +27,8 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "43200"
+      - key: PYTHON_VERSION
+        value: 3.12.7
       - key: AUTH_COOKIE_SAMESITE
         value: none
       - key: AUTH_COOKIE_SECURE
