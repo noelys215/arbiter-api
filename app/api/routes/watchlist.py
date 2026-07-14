@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import COOKIE_NAME, get_current_user, get_db, get_user_from_access_token
 from app.api.http_errors import permission_error, value_error
 from app.api.presenters.titles import build_title_out_with_taxonomy
 from app.models.user import User
+from app.models.watchlist_item import WatchlistItem
 from app.schemas.watchlist import (
     AddWatchlistRequest,
     WatchlistItemOut,
@@ -20,10 +22,12 @@ from app.services.watchlist import (
     UNSET,
     add_watchlist_item_manual,
     add_watchlist_item_tmdb,
+    assert_user_in_group,
     list_watchlist,
     list_watchlist_page,
     patch_watchlist_item,
 )
+from app.services.watchlist_realtime import watchlist_realtime_hub
 
 router = APIRouter(tags=["watchlist"])
 
@@ -74,7 +78,13 @@ async def add_watchlist_route(
                 poster_path=payload.poster_path,
             )
             await db.commit()
-            return await to_out(item, already_exists=already)
+            out = await to_out(item, already_exists=already)
+            if not already:
+                await watchlist_realtime_hub.broadcast_watchlist_updated(
+                    group_id,
+                    reason="item_added",
+                )
+            return out
 
         # manual
         item = await add_watchlist_item_manual(
@@ -88,12 +98,47 @@ async def add_watchlist_route(
             overview=getattr(payload, "overview", None),
         )
         await db.commit()
-        return await to_out(item, already_exists=False)
+        out = await to_out(item, already_exists=False)
+        await watchlist_realtime_hub.broadcast_watchlist_updated(
+            group_id,
+            reason="item_added",
+        )
+        return out
 
     except PermissionError as e:
         raise permission_error(e) from e
     except ValueError as e:
         raise value_error(e) from e
+
+
+@router.websocket("/groups/{group_id}/watchlist/ws")
+async def watchlist_updates_ws(websocket: WebSocket, group_id: UUID):
+    access_token = websocket.cookies.get(COOKIE_NAME)
+    async for db in get_db():
+        try:
+            user = await get_user_from_access_token(db, access_token)
+            await assert_user_in_group(db, group_id, user.id)
+        except Exception:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        break
+
+    await watchlist_realtime_hub.connect(group_id, websocket)
+    try:
+        await websocket.send_json(
+            {
+                "type": "watchlist_connected",
+                "group_id": str(group_id),
+            }
+        )
+        while True:
+            message = await websocket.receive_json()
+            if isinstance(message, dict) and message.get("type") == "ping":
+                await websocket.send_json({"type": "pong", "group_id": str(group_id)})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await watchlist_realtime_hub.disconnect(group_id, websocket)
 
 
 @router.get("/groups/{group_id}/watchlist", response_model=list[WatchlistItemOut] | WatchlistPageOut)
@@ -160,6 +205,9 @@ async def patch_watchlist_route(
         data = payload.model_dump(exclude_unset=True)
 
         snoozed_arg = data["snoozed_until"] if "snoozed_until" in data else UNSET
+        item_group_id = (
+            await db.execute(select(WatchlistItem.group_id).where(WatchlistItem.id == item_id))
+        ).scalar_one_or_none()
 
         removed = await patch_watchlist_item(
             db,
@@ -170,6 +218,11 @@ async def patch_watchlist_route(
             remove=data.get("remove"),
         )
         await db.commit()
+        if item_group_id is not None:
+            await watchlist_realtime_hub.broadcast_watchlist_updated(
+                item_group_id,
+                reason="item_removed" if removed else "item_updated",
+            )
         return {"ok": True, "removed": bool(removed)}
     except PermissionError as e:
         raise permission_error(e) from e

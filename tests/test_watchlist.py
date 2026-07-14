@@ -49,7 +49,25 @@ async def test_watchlist_membership_required(async_client, user_factory, login_h
 
 
 @pytest.mark.anyio
-async def test_watchlist_tmdb_add_and_duplicate_returns_existing(async_client, user_factory, login_helper):
+async def test_watchlist_tmdb_add_and_duplicate_returns_existing(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.api.routes import watchlist as watchlist_routes
+
+    broadcasts: list[tuple[str, str]] = []
+
+    async def fake_broadcast(group_id, *, reason: str):
+        broadcasts.append((str(group_id), reason))
+
+    monkeypatch.setattr(
+        watchlist_routes.watchlist_realtime_hub,
+        "broadcast_watchlist_updated",
+        fake_broadcast,
+    )
+
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
@@ -76,12 +94,19 @@ async def test_watchlist_tmdb_add_and_duplicate_returns_existing(async_client, u
     assert item1["title"]["name"] == "The Matrix"
     assert item1["title"]["release_year"] == 1999
     assert item1["title"]["poster_path"] == "/matrix.jpg"
+    assert (group_id, "item_added") in broadcasts
 
     r2 = await async_client.post(f"/groups/{group_id}/watchlist", json=payload)
     assert r2.status_code == 201
     item2 = r2.json()
     assert item2["already_exists"] is True
     assert item2["id"] == item1["id"]
+    assert broadcasts.count((group_id, "item_added")) == 1
+
+    remove = await async_client.patch(f"/watchlist-items/{item1['id']}", json={"remove": True})
+    assert remove.status_code == 200
+    assert remove.json()["removed"] is True
+    assert (group_id, "item_removed") in broadcasts
 
 
 @pytest.mark.anyio
