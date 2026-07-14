@@ -20,10 +20,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def get_current_user(
-    db: AsyncSession = Depends(get_db),
-    access_token: str | None = Cookie(default=None, alias=COOKIE_NAME),
-) -> User:
+async def get_user_from_access_token(db: AsyncSession, access_token: str | None) -> User:
     if not access_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
@@ -48,3 +45,10 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+async def get_current_user(
+    db: AsyncSession = Depends(get_db),
+    access_token: str | None = Cookie(default=None, alias=COOKIE_NAME),
+) -> User:
+    return await get_user_from_access_token(db, access_token)

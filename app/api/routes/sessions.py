@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import COOKIE_NAME, get_current_user, get_db, get_user_from_access_token
 from app.api.http_errors import permission_error, value_error
 from app.api.presenters.titles import build_title_out_with_taxonomy
 from app.models.watchlist_item import WatchlistItem
@@ -30,6 +30,7 @@ from app.services.sessions import (
     set_session_watch_party_url,
     shuffle_and_complete,
 )
+from app.services.session_realtime import session_realtime_hub
 
 router = APIRouter(tags=["sessions"])
 
@@ -188,6 +189,36 @@ async def vote_route(
         raise permission_error(e) from e
     except ValueError as e:
         raise _session_value_error(e, include_not_found=True) from e
+
+
+@router.websocket("/sessions/{session_id}/ws")
+async def session_updates_ws(websocket: WebSocket, session_id: UUID):
+    access_token = websocket.cookies.get(COOKIE_NAME)
+    async for db in get_db():
+        try:
+            user = await get_user_from_access_token(db, access_token)
+            await get_session_state(db, session_id=session_id, user_id=user.id)
+        except Exception:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        break
+
+    await session_realtime_hub.connect(session_id, websocket)
+    try:
+        await websocket.send_json(
+            {
+                "type": "session_connected",
+                "session_id": str(session_id),
+            }
+        )
+        while True:
+            message = await websocket.receive_json()
+            if isinstance(message, dict) and message.get("type") == "ping":
+                await websocket.send_json({"type": "pong", "session_id": str(session_id)})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await session_realtime_hub.disconnect(session_id, websocket)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionStateResponse)
