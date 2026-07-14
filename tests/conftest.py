@@ -15,6 +15,9 @@ os.environ.setdefault(
 )
 os.environ.setdefault("JWT_SECRET", "dev-test-secret")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
+os.environ["OAUTH_GOOGLE_CLIENT_ID"] = ""
+os.environ["OAUTH_GOOGLE_CLIENT_SECRET"] = ""
+os.environ["OAUTH_SESSION_SECRET"] = ""
 
 from app.main import app as fastapi_app  # noqa: E402
 from app.db.base_class import Base  # noqa: E402

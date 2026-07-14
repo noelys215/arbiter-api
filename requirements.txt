@@ -13,4 +13,5 @@ python-dotenv==1.2.1
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.9
 SQLAlchemy==2.0.45
+greenlet==3.3.0
 uvicorn[standard]==0.40.0

@@ -52,7 +52,7 @@ if SessionMiddleware is not None:
     app.add_middleware(
         SessionMiddleware,
         secret_key=(settings.oauth_session_secret or settings.jwt_secret),
-        same_site=settings.auth_cookie_samesite,
+        same_site=settings.auth_cookie_samesite_value(),
         https_only=settings.auth_cookie_secure_value(),
     )
 

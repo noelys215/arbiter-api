@@ -14,7 +14,7 @@ def magic_link_email_configured() -> bool:
 
 
 def build_magic_link(token: str) -> str:
-    base = settings.magic_link_verify_url.strip()
+    base = settings.magic_link_verify_url_value().strip()
     separator = "&" if "?" in base else "?"
     return f"{base}{separator}token={quote_plus(token)}"
 

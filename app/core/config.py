@@ -68,16 +68,46 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_cookie_settings(self) -> "Settings":
-        if self.auth_cookie_samesite not in {"lax", "strict", "none"}:
+        if self.auth_cookie_samesite_value() not in {"lax", "strict", "none"}:
             raise ValueError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
-        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure_value():
+        if self.auth_cookie_samesite_value() == "none" and not self.auth_cookie_secure_value():
             raise ValueError("AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true")
         return self
 
+    def is_local_env(self) -> bool:
+        return self.env in {"local", "test"}
+
+    def oauth_google_callback_url_value(self) -> str:
+        if self.is_local_env():
+            return "http://localhost:8000/auth/google/callback"
+        return self.oauth_google_callback_url
+
+    def oauth_frontend_success_url_value(self) -> str:
+        if self.is_local_env():
+            return "http://localhost:5173/app"
+        return self.oauth_frontend_success_url
+
+    def oauth_frontend_failure_url_value(self) -> str:
+        if self.is_local_env():
+            return "http://localhost:5173/login"
+        return self.oauth_frontend_failure_url
+
+    def magic_link_verify_url_value(self) -> str:
+        if self.is_local_env():
+            return "http://localhost:8000/auth/magic-link/verify"
+        return self.magic_link_verify_url
+
+    def auth_cookie_samesite_value(self) -> str:
+        if self.is_local_env():
+            return "lax"
+        return self.auth_cookie_samesite
+
     def auth_cookie_secure_value(self) -> bool:
+        if self.is_local_env():
+            return False
         if self.auth_cookie_secure is not None:
             return self.auth_cookie_secure
-        return self.env not in {"local", "test"}
+        return True
 
     def cors_origin_list(self) -> list[str]:
         raw = (self.cors_origins or "").strip()

@@ -46,13 +46,19 @@ async def test_logout_revokes_auth_cookie(client, user_factory, login_helper):
 
 
 async def test_logout_clears_oauth_session_cookie(client):
-    client.cookies.set("session", "oauth-state-cookie")
+    client.cookies.set("session", "oauth-state-cookie", domain="test", path="/")
     assert client.cookies.get("session")
 
     logout = await client.post("/auth/logout")
     assert logout.status_code == 200
     assert logout.json() == {"ok": True}
-    assert client.cookies.get("session") is None
+    session_clear_headers = [
+        value
+        for value in logout.headers.get_list("set-cookie")
+        if value.startswith("session=")
+    ]
+    assert session_clear_headers
+    assert "Max-Age=0" in session_clear_headers[0]
 
 
 async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monkeypatch):

@@ -187,6 +187,11 @@ Return ONLY JSON in this exact shape:
 
 Rules:
 - ordered_ids MUST contain only ids from the provided candidate list.
+- Treat free_text intent as highest priority.
+- If free_text contains strict language (e.g. "only", "strictly", "must be", "nothing but"), enforce those constraints.
+- If free_text contains flexible language (e.g. "or similar", "something like"), prefer best semantic matches and allow close alternatives.
+- For studio/company mentions, treat production/distribution/brand-adjacent matches as relevant when strict language is absent.
+- Use all candidate metadata fields when present (genres, keywords, people, companies, locale tokens).
 - Do not include anything other than JSON.
 """
 

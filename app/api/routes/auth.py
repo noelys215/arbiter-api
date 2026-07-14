@@ -47,7 +47,7 @@ def _auth_cookie_options() -> dict[str, object]:
     options: dict[str, object] = {
         "httponly": True,
         "secure": settings.auth_cookie_secure_value(),
-        "samesite": settings.auth_cookie_samesite,
+        "samesite": settings.auth_cookie_samesite_value(),
         "path": "/",
     }
     domain = (settings.auth_cookie_domain or "").strip()
@@ -87,14 +87,22 @@ def _clear_oauth_session_cookie(response: Response) -> None:
 
 
 def _oauth_failure_redirect(reason: str) -> RedirectResponse:
-    separator = "&" if "?" in settings.oauth_frontend_failure_url else "?"
-    destination = f"{settings.oauth_frontend_failure_url}{separator}oauth_error={quote_plus(reason)}"
+    failure_url = settings.oauth_frontend_failure_url_value()
+    separator = "&" if "?" in failure_url else "?"
+    destination = f"{failure_url}{separator}oauth_error={quote_plus(reason)}"
     return RedirectResponse(url=destination, status_code=status.HTTP_302_FOUND)
 
 
 def _append_query_param(url: str, key: str, value: str) -> str:
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}{key}={quote_plus(value)}"
+
+
+def _google_callback_url_for_request(request: Request) -> str:
+    if settings.is_local_env():
+        # Match whatever local host the browser used (localhost vs 127.0.0.1).
+        return str(request.url_for("google_callback"))
+    return settings.oauth_google_callback_url_value()
 
 
 def _require_oauth_client(provider: str):
@@ -277,7 +285,7 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
         await db.refresh(user)
 
     destination = _append_query_param(
-        settings.oauth_frontend_success_url,
+        settings.oauth_frontend_success_url_value(),
         "auth",
         "magic-link",
     )
@@ -324,7 +332,7 @@ async def login(payload: LoginRequest, response: Response, db: AsyncSession = De
 async def google_login(request: Request):
     client = _require_oauth_client("google")
     _require_oauth_session(request)
-    return await client.authorize_redirect(request, settings.oauth_google_callback_url)
+    return await client.authorize_redirect(request, _google_callback_url_for_request(request))
 
 
 @router.get("/google/callback")
@@ -377,7 +385,10 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
         avatar_url=avatar_url,
     )
 
-    response = RedirectResponse(url=settings.oauth_frontend_success_url, status_code=status.HTTP_302_FOUND)
+    response = RedirectResponse(
+        url=settings.oauth_frontend_success_url_value(),
+        status_code=status.HTTP_302_FOUND,
+    )
     _set_auth_cookie(response, str(user.id))
     return response
 

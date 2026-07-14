@@ -18,6 +18,8 @@ _DEFAULT_PROVIDER_REGION = "US"
 _EXCLUDED_STREAMING_PROVIDER_NAMES = {
     "netflix standard with ads",
 }
+_WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
+_WIKIDATA_COMPANY_PROPERTY_IDS = ("P272", "P750", "P449")
 _JUSTWATCH_ANCHOR_RE = re.compile(
     r'<a href="(?P<href>https://click\.justwatch\.com/a\?[^"]+)"[^>]*title="(?P<title>[^"]+)"',
     flags=re.IGNORECASE,
@@ -193,6 +195,435 @@ async def fetch_tmdb_title_taxonomy(
         },
     )
     return genres, keywords, genre_ids
+
+
+async def fetch_tmdb_title_people_names(
+    *,
+    tmdb_id: int,
+    media_type: str,
+) -> set[str]:
+    if media_type not in {"movie", "tv"}:
+        return set()
+    if settings.env == "test":
+        return set()
+
+    key = f"people:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        raw = cached.get("names", [])
+        if isinstance(raw, list):
+            return {
+                _normalize_term(value)
+                for value in raw
+                if isinstance(value, str) and value.strip()
+            }
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+    credits_path = (
+        f"/movie/{tmdb_id}/credits"
+        if media_type == "movie"
+        else f"/tv/{tmdb_id}/aggregate_credits"
+    )
+
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(credits_path, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    names: list[str] = []
+    cast_rows = data.get("cast")
+    if isinstance(cast_rows, list):
+        for row in cast_rows[:40]:
+            if not isinstance(row, dict):
+                continue
+            raw_name = row.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                names.append(raw_name)
+
+    crew_rows = data.get("crew")
+    if isinstance(crew_rows, list):
+        for row in crew_rows[:60]:
+            if not isinstance(row, dict):
+                continue
+            raw_name = row.get("name")
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                continue
+
+            include = False
+            known_for = _normalize_term(str(row.get("known_for_department") or ""))
+            if known_for in {"directing", "writing", "production", "acting"}:
+                include = True
+
+            job = _normalize_term(str(row.get("job") or ""))
+            if job in {
+                "creator",
+                "director",
+                "screenplay",
+                "writer",
+                "executive producer",
+                "producer",
+                "host",
+                "presenter",
+            }:
+                include = True
+
+            jobs = row.get("jobs")
+            if isinstance(jobs, list):
+                for item in jobs:
+                    if not isinstance(item, dict):
+                        continue
+                    role = _normalize_term(str(item.get("job") or ""))
+                    if role in {
+                        "creator",
+                        "director",
+                        "screenplay",
+                        "writer",
+                        "executive producer",
+                        "producer",
+                        "host",
+                        "presenter",
+                    }:
+                        include = True
+                        break
+
+            if include:
+                names.append(raw_name)
+
+    normalized = {
+        _normalize_term(name)
+        for name in names
+        if isinstance(name, str) and name.strip()
+    }
+    _cache_set(key, {"names": sorted(normalized)})
+    return normalized
+
+
+async def fetch_tmdb_title_locale_tokens(
+    *,
+    tmdb_id: int,
+    media_type: str,
+) -> set[str]:
+    if media_type not in {"movie", "tv"}:
+        return set()
+    if settings.env == "test":
+        return set()
+
+    key = f"locale:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        raw = cached.get("tokens", [])
+        if isinstance(raw, list):
+            return {
+                _normalize_term(value)
+                for value in raw
+                if isinstance(value, str) and value.strip()
+            }
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+    path = f"/{media_type}/{tmdb_id}"
+
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(path, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    tokens: set[str] = set()
+
+    original_language = data.get("original_language")
+    if isinstance(original_language, str) and original_language.strip():
+        tokens.add(_normalize_term(original_language))
+
+    spoken = data.get("spoken_languages")
+    if isinstance(spoken, list):
+        for row in spoken:
+            if not isinstance(row, dict):
+                continue
+            for key_name in ("iso_639_1", "english_name", "name"):
+                raw_value = row.get(key_name)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    tokens.add(_normalize_term(raw_value))
+
+    origin_country = data.get("origin_country")
+    if isinstance(origin_country, list):
+        for value in origin_country:
+            if isinstance(value, str) and value.strip():
+                tokens.add(_normalize_term(value))
+
+    production_countries = data.get("production_countries")
+    if isinstance(production_countries, list):
+        for row in production_countries:
+            if not isinstance(row, dict):
+                continue
+            for key_name in ("iso_3166_1", "name"):
+                raw_value = row.get(key_name)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    tokens.add(_normalize_term(raw_value))
+
+    _cache_set(key, {"tokens": sorted(tokens)})
+    return tokens
+
+
+async def fetch_tmdb_title_company_names(
+    *,
+    tmdb_id: int,
+    media_type: str,
+) -> set[str]:
+    if media_type not in {"movie", "tv"}:
+        return set()
+    if settings.env == "test":
+        return set()
+
+    key = f"companies:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        raw = cached.get("names", [])
+        if isinstance(raw, list):
+            return {
+                _normalize_term(value)
+                for value in raw
+                if isinstance(value, str) and value.strip()
+            }
+
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+    path = f"/{media_type}/{tmdb_id}"
+
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            r = await client.get(path, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    names: set[str] = set()
+    production_companies = data.get("production_companies")
+    if isinstance(production_companies, list):
+        for row in production_companies:
+            if not isinstance(row, dict):
+                continue
+            raw_name = row.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                names.add(_normalize_term(raw_name))
+
+    networks = data.get("networks")
+    if isinstance(networks, list):
+        for row in networks:
+            if not isinstance(row, dict):
+                continue
+            raw_name = row.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                names.add(_normalize_term(raw_name))
+
+    _cache_set(key, {"names": sorted(names)})
+    return names
+
+
+def _wikidata_entity_id_from_claim(claim: Any) -> str | None:
+    if not isinstance(claim, dict):
+        return None
+    main_snak = claim.get("mainsnak")
+    if not isinstance(main_snak, dict):
+        return None
+    data_value = main_snak.get("datavalue")
+    if not isinstance(data_value, dict):
+        return None
+    value = data_value.get("value")
+    if not isinstance(value, dict):
+        return None
+    entity_id = value.get("id")
+    if isinstance(entity_id, str) and entity_id.startswith("Q"):
+        return entity_id
+    return None
+
+
+def _normalize_wikidata_title(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def _pick_wikidata_title_entity(
+    *,
+    results: list[dict[str, Any]],
+    title: str,
+    release_year: int | None,
+    media_type: str,
+) -> str | None:
+    if not results:
+        return None
+
+    target = _normalize_wikidata_title(title)
+    best_id: str | None = None
+    best_score = -1
+
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        entity_id = row.get("id")
+        if not isinstance(entity_id, str) or not entity_id.startswith("Q"):
+            continue
+
+        label = _normalize_wikidata_title(str(row.get("label") or ""))
+        description = _normalize_wikidata_title(str(row.get("description") or ""))
+        score = 0
+        if label and (label == target or target in label or label in target):
+            score += 3
+        if release_year and str(release_year) in description:
+            score += 2
+        if media_type == "movie" and "film" in description:
+            score += 2
+        if media_type == "tv" and any(term in description for term in ("television", "tv", "series")):
+            score += 2
+
+        if score > best_score:
+            best_score = score
+            best_id = entity_id
+
+    return best_id
+
+
+async def fetch_web_title_company_names(
+    *,
+    title: str,
+    release_year: int | None,
+    media_type: str,
+) -> set[str]:
+    if media_type not in {"movie", "tv"}:
+        return set()
+    if settings.env == "test":
+        return set()
+
+    normalized_title = _normalize_term(title)
+    if not normalized_title:
+        return set()
+
+    year_key = str(release_year) if isinstance(release_year, int) else "na"
+    key = f"web-companies:{media_type}:{normalized_title}:{year_key}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        raw = cached.get("names", [])
+        if isinstance(raw, list):
+            return {
+                _normalize_term(value)
+                for value in raw
+                if isinstance(value, str) and value.strip()
+            }
+
+    search_params = {
+        "action": "wbsearchentities",
+        "search": title,
+        "language": "en",
+        "format": "json",
+        "type": "item",
+        "limit": 8,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            search_response = await client.get(_WIKIDATA_API_URL, params=search_params)
+            search_response.raise_for_status()
+            search_payload = search_response.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    search_rows = search_payload.get("search")
+    if not isinstance(search_rows, list):
+        return set()
+
+    entity_id = _pick_wikidata_title_entity(
+        results=[row for row in search_rows if isinstance(row, dict)],
+        title=title,
+        release_year=release_year,
+        media_type=media_type,
+    )
+    if not entity_id:
+        return set()
+
+    detail_params = {
+        "action": "wbgetentities",
+        "ids": entity_id,
+        "props": "claims",
+        "format": "json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            detail_response = await client.get(_WIKIDATA_API_URL, params=detail_params)
+            detail_response.raise_for_status()
+            detail_payload = detail_response.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    entities = detail_payload.get("entities")
+    if not isinstance(entities, dict):
+        return set()
+    entity = entities.get(entity_id)
+    if not isinstance(entity, dict):
+        return set()
+    claims = entity.get("claims")
+    if not isinstance(claims, dict):
+        return set()
+
+    company_entity_ids: set[str] = set()
+    for property_id in _WIKIDATA_COMPANY_PROPERTY_IDS:
+        claim_rows = claims.get(property_id)
+        if not isinstance(claim_rows, list):
+            continue
+        for claim in claim_rows:
+            value_id = _wikidata_entity_id_from_claim(claim)
+            if value_id:
+                company_entity_ids.add(value_id)
+
+    if not company_entity_ids:
+        return set()
+
+    label_params = {
+        "action": "wbgetentities",
+        "ids": "|".join(sorted(company_entity_ids)),
+        "props": "labels",
+        "languages": "en",
+        "format": "json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            label_response = await client.get(_WIKIDATA_API_URL, params=label_params)
+            label_response.raise_for_status()
+            label_payload = label_response.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+
+    label_entities = label_payload.get("entities")
+    if not isinstance(label_entities, dict):
+        return set()
+
+    names: set[str] = set()
+    for company_id in company_entity_ids:
+        row = label_entities.get(company_id)
+        if not isinstance(row, dict):
+            continue
+        labels = row.get("labels")
+        if not isinstance(labels, dict):
+            continue
+        en = labels.get("en")
+        if not isinstance(en, dict):
+            continue
+        raw_name = en.get("value")
+        if isinstance(raw_name, str) and raw_name.strip():
+            names.add(_normalize_term(raw_name))
+
+    _cache_set(key, {"names": sorted(names)})
+    return names
 
 
 def _runtime_from_tmdb_payload(*, media_type: str, data: dict[str, Any]) -> int | None:

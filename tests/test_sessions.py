@@ -385,6 +385,651 @@ async def test_hard_filter_format_movie(async_client, user_factory, login_helper
 
 
 @pytest.mark.anyio
+async def test_free_text_anime_only_strictly_filters_deck(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2101:
+            return {"animation"}, {"anime", "shounen"}, {16}
+        if tmdb_id == 2102:
+            return {"comedy"}, {"sitcom"}, {35}
+        return set(), set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="AnimeFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    anime_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2101, "media_type": "tv", "title": "Anime Show", "year": 2020, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2102, "media_type": "tv", "title": "Comedy Show", "year": 2020, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "anime only",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {anime_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_actor_filter_restricts_to_requested_person(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_people(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2201:
+            return {"gordon ramsay", "christina tosi"}
+        if tmdb_id == 2202:
+            return {"anthony bourdain"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_people_names", fake_people)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="ActorFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    gordon_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2201, "media_type": "tv", "title": "Kitchen Nightmares", "year": 2010, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2202, "media_type": "tv", "title": "Parts Unknown", "year": 2013, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "show me shows with gordon ramsay",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {gordon_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_studio_filter_restricts_to_requested_company(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_companies(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2251:
+            return {"a24"}
+        if tmdb_id == 2252:
+            return {"warner bros. pictures", "alcon entertainment"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_company_names", fake_companies)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="StudioFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    a24_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2251, "media_type": "movie", "title": "Past Lives", "year": 2023, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2252, "media_type": "movie", "title": "Blade Runner 2049", "year": 2017, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "Give me stuff by the studio A24.",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {a24_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_studio_filter_uses_web_distributor_evidence(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_companies(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2253:
+            return {"B-Reel Films"}
+        if tmdb_id == 2254:
+            return {"Warner Bros. Pictures"}
+        return set()
+
+    async def fake_web_companies(*, title: str, release_year: int | None, media_type: str):
+        _ = (release_year, media_type)
+        if title == "Midsommar":
+            return {"A24"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_company_names", fake_companies)
+    monkeypatch.setattr(sessions_service, "fetch_web_title_company_names", fake_web_companies)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="StudioWebEvidence")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    midsommar_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2253, "media_type": "movie", "title": "Midsommar", "year": 2019, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2254, "media_type": "movie", "title": "Dune", "year": 2021, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "only stuff by studio a24",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {midsommar_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_similarity_phrase_relaxes_strict_studio_and_anime_filters(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_companies(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2261:
+            return {"studio ghibli"}
+        if tmdb_id == 2262:
+            return {"a24"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_company_names", fake_companies)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="StudioSimilarity")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    ghibli_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": 2261,
+                "media_type": "movie",
+                "title": "Romance Anime Ghibli",
+                "year": 2001,
+                "poster_path": None,
+            },
+        )
+    ).json()
+    non_ghibli_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": 2262,
+                "media_type": "movie",
+                "title": "Romance Anime Similar",
+                "year": 2018,
+                "poster_path": None,
+            },
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "a romantic anime by studio ghibli or something similar",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ghibli_item["id"] in ids
+    assert non_ghibli_item["id"] in ids
+
+
+@pytest.mark.anyio
+async def test_free_text_happy_alias_maps_to_feel_good_mood(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2265:
+            return {"comedy"}, {"uplifting", "heartwarming"}, {35}
+        if tmdb_id == 2266:
+            return {"horror"}, {"haunted"}, {27}
+        return set(), set(), set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="MoodAlias")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    happy_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2265, "media_type": "movie", "title": "Happy Movie", "year": 2016, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2266, "media_type": "movie", "title": "Scary Movie", "year": 2018, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "show me something happy and lighthearted",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {happy_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_ai_rerank_payload_includes_tmdb_metadata(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    captured: dict[str, list[dict]] = {}
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2271:
+            return {"romance"}, {"love story"}, {10749}
+        if tmdb_id == 2272:
+            return {"science fiction"}, {"future"}, {878}
+        return set(), set(), set()
+
+    async def fake_people(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2271:
+            return {"Greta Lee"}
+        return {"Ryan Gosling"}
+
+    async def fake_companies(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2271:
+            return {"A24"}
+        return {"Warner Bros. Pictures"}
+
+    async def fake_locale(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2271:
+            return {"en", "us"}
+        return {"en", "gb"}
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = constraints
+        captured["candidates"] = candidates
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_people_names", fake_people)
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_company_names", fake_companies)
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_locale_tokens", fake_locale)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="AIRerankMetadata")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    await async_client.post(
+        f"/groups/{group_id}/watchlist",
+        json={"type": "tmdb", "tmdb_id": 2271, "media_type": "movie", "title": "Past Lives", "year": 2023, "poster_path": None},
+    )
+    await async_client.post(
+        f"/groups/{group_id}/watchlist",
+        json={"type": "tmdb", "tmdb_id": 2272, "media_type": "movie", "title": "Blade Runner 2049", "year": 2017, "poster_path": None},
+    )
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "pick something fun for tonight",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    candidates_payload = captured.get("candidates")
+    assert isinstance(candidates_payload, list)
+    assert len(candidates_payload) >= 2
+    sample = candidates_payload[0]
+    assert "tmdb_genres" in sample
+    assert "tmdb_keywords" in sample
+    assert "tmdb_genre_ids" in sample
+    assert "tmdb_people" in sample
+    assert "tmdb_companies" in sample
+    assert "web_companies" in sample
+    assert "tmdb_locale_tokens" in sample
+
+
+@pytest.mark.anyio
+async def test_free_text_directed_by_filter_restricts_to_requested_person(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_people(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2301:
+            return {"christopher nolan", "hans zimmer"}
+        if tmdb_id == 2302:
+            return {"greta gerwig"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_people_names", fake_people)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="DirectorFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    nolan_item = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2301, "media_type": "movie", "title": "Inception", "year": 2010, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2302, "media_type": "movie", "title": "Lady Bird", "year": 2017, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "show me movies directed by christopher nolan",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {nolan_item["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_locale_genre_and_exclusion_filters(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_taxonomy(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id == 2401:
+            return {"drama"}, {"coming of age"}, {18}
+        if tmdb_id == 2402:
+            return {"horror"}, {"slasher"}, {27}
+        if tmdb_id == 2403:
+            return {"drama"}, {"courtroom"}, {18}
+        return set(), set(), set()
+
+    async def fake_locale(*, tmdb_id: int, media_type: str):
+        _ = media_type
+        if tmdb_id in {2401, 2402}:
+            return {"ko", "korean", "south korea", "kr"}
+        if tmdb_id == 2403:
+            return {"en", "us", "united states"}
+        return set()
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_taxonomy", fake_taxonomy)
+    monkeypatch.setattr(sessions_service, "fetch_tmdb_title_locale_tokens", fake_locale)
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="LocaleGenreFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    korean_drama = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2401, "media_type": "tv", "title": "K-Drama A", "year": 2021, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2402, "media_type": "tv", "title": "K-Horror B", "year": 2022, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2403, "media_type": "tv", "title": "US Drama C", "year": 2023, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "korean drama only, no horror",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {korean_drama["id"]}
+
+
+@pytest.mark.anyio
+async def test_free_text_year_and_format_filters(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.services import sessions as sessions_service
+    from app.services.ai import AIError
+
+    async def fake_rerank(*, constraints, candidates):
+        _ = (constraints, candidates)
+        raise AIError("disable rerank")
+
+    monkeypatch.setattr(sessions_service, "ai_rerank_candidates", fake_rerank)
+
+    user = await user_factory(async_client, display_name="YearFilter")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+
+    old_show = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2501, "media_type": "tv", "title": "Show Old", "year": 2015, "poster_path": None},
+        )
+    ).json()
+    recent_show = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2502, "media_type": "tv", "title": "Show New", "year": 2022, "poster_path": None},
+        )
+    ).json()
+    _ = (
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 2503, "media_type": "movie", "title": "Movie New", "year": 2023, "poster_path": None},
+        )
+    ).json()
+
+    r = await async_client.post(
+        f"/groups/{group_id}/sessions",
+        json={
+            "constraints": {},
+            "text": "tv only after 2018",
+            "duration_seconds": 90,
+            "candidate_count": 12,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    ids = {c["watchlist_item_id"] for c in data["candidates"]}
+    assert ids == {recent_show["id"]}
+    assert old_show["id"] not in ids
+
+
+@pytest.mark.anyio
 async def test_mood_tags_use_synonyms_and_tmdb_taxonomy(async_client, monkeypatch, user_factory, login_helper):
     from app.services import sessions as sessions_service
     from app.services.ai import AIError
@@ -743,3 +1388,78 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
         assert final_state["phase"] in ("swiping", "waiting")
         assert final_state["round"] == 1
         assert 0 <= int(final_state["user_seconds_left"]) <= 60
+
+
+@pytest.mark.anyio
+async def test_user_can_unready_after_confirm_to_edit_preferences(
+    async_client, client_factory, user_factory, login_helper
+):
+    async with client_factory() as client_b:
+        user_a = await user_factory(async_client, display_name="A")
+        await login_helper(async_client, email=user_a["email"], password=user_a["password"])
+        user_b = await user_factory(client_b, display_name="B")
+        await login_helper(client_b, email=user_b["email"], password=user_b["password"])
+
+        invite_b = (await async_client.post("/friends/invite")).json()["code"]
+        await client_b.post("/friends/accept", json={"code": invite_b})
+        friends = (await async_client.get("/friends")).json()
+        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+
+        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group_id = group["id"]
+
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 911, "media_type": "movie", "title": "A", "year": 2000, "poster_path": None},
+        )
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={"type": "tmdb", "tmdb_id": 912, "media_type": "movie", "title": "B", "year": 2001, "poster_path": None},
+        )
+
+        body_deal = {
+            "constraints": {"moods": ["cozy"]},
+            "confirm_ready": False,
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        }
+        first = (await async_client.post(f"/groups/{group_id}/sessions", json=body_deal)).json()
+        session_id = first["session_id"]
+        second = (await client_b.post(f"/groups/{group_id}/sessions", json=body_deal)).json()
+        assert second["session_id"] == session_id
+
+        confirm_body = {
+            "constraints": {},
+            "confirm_ready": True,
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        }
+        confirm_response = await async_client.post(
+            f"/groups/{group_id}/sessions",
+            json=confirm_body,
+        )
+        assert confirm_response.status_code == 201, confirm_response.text
+
+        state_after_confirm = (await async_client.get(f"/sessions/{session_id}")).json()
+        assert state_after_confirm["status"] == "active"
+        assert state_after_confirm["round"] == 0
+        assert state_after_confirm["user_locked"] is True
+
+        # User A clicks Back/Edit in the deal modal.
+        unready_response = await async_client.post(
+            f"/groups/{group_id}/sessions",
+            json={
+                "constraints": {},
+                "confirm_ready": False,
+                "duration_seconds": 90,
+                "candidate_count": 5,
+            },
+        )
+        assert unready_response.status_code == 201, unready_response.text
+        assert unready_response.json()["session_id"] == session_id
+
+        state_after_unready = (await async_client.get(f"/sessions/{session_id}")).json()
+        assert state_after_unready["status"] == "active"
+        assert state_after_unready["round"] == 0
+        assert state_after_unready["phase"] in ("collecting", "waiting")
+        assert state_after_unready["user_locked"] is False

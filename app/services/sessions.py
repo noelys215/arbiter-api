@@ -6,7 +6,7 @@ import json
 import random
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -23,7 +23,13 @@ from app.models.tonight_vote import TonightVote
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.tonight_constraints import TonightConstraints
 from app.services.ai import AIError, ai_parse_constraints, ai_rerank_candidates
-from app.services.tmdb import fetch_tmdb_title_taxonomy
+from app.services.tmdb import (
+    fetch_tmdb_title_company_names,
+    fetch_tmdb_title_locale_tokens,
+    fetch_tmdb_title_people_names,
+    fetch_tmdb_title_taxonomy,
+    fetch_web_title_company_names,
+)
 from app.services.watchlist import assert_user_in_group
 
 
@@ -39,6 +45,134 @@ def _stable_seed(value: str) -> int:
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
+_ANIME_RE = re.compile(r"\banime\b")
+_ANIME_ONLY_RE = re.compile(r"\b(?:anime\s+only|only\s+anime|just\s+anime|strictly\s+anime)\b")
+_PEOPLE_CUE_RE = re.compile(
+    r"\b(?:with|starring|featuring|hosted by|presented by|directed by|created by|written by|produced by|by)\s+([a-z0-9' .,&-]{2,120})"
+)
+_PEOPLE_POSSESSIVE_RE = re.compile(r"\b([a-z][a-z'`.-]+(?:\s+[a-z][a-z'`.-]+){1,3})\s+(?:shows?|movies?|films?|series)\b")
+_PEOPLE_STOP_RE = re.compile(r"\b(?:only|please|that|which|who|for|to|tonight|now|thanks|from|in|on|after|before|between)\b")
+_STUDIO_CUE_RE = re.compile(
+    r"\b(?:by|from)\s+(?:the\s+)?(?:studio|studios|production company|production companies|company)\s+([a-z0-9' .,&-]{2,120})"
+)
+_STUDIO_WORD_RE = re.compile(r"\b(?:studio|studios)\s+([a-z0-9' .,&-]{2,120})")
+_SIMILARITY_CUE_RE = re.compile(r"\b(?:or\s+similar|or\s+something\s+similar|something\s+similar|in\s+that\s+vein)\b")
+_MOVIE_ONLY_RE = re.compile(
+    r"\b(?:(?:movie|movies|film|films)\s+only|only\s+(?:movie|movies|film|films)|no\s+(?:tv|shows?|series))\b"
+)
+_TV_ONLY_RE = re.compile(
+    r"\b(?:(?:tv|show|shows|series)\s+only|only\s+(?:tv|show|shows|series)|no\s+(?:movies?|films?))\b"
+)
+_YEAR_BETWEEN_RE = re.compile(r"\bbetween\s+(19\d{2}|20\d{2})\s+(?:and|to)\s+(19\d{2}|20\d{2})\b")
+_YEAR_AFTER_RE = re.compile(r"\b(?:after|since|from)\s+(19\d{2}|20\d{2})\b")
+_YEAR_BEFORE_RE = re.compile(r"\b(?:before|until|pre)\s+(19\d{2}|20\d{2})\b")
+_YEAR_DECADE_RE = re.compile(r"\b((?:19|20)\d0)s\b")
+_ANIME_KEYWORDS = {
+    "anime",
+    "anime adaptation",
+    "japanese animation",
+    "manga",
+    "otaku",
+    "shounen",
+    "shojo",
+    "seinen",
+}
+_ANIME_GENRE_IDS = {16}
+_NON_PERSON_TOKENS = {
+    "anime",
+    "movie",
+    "movies",
+    "film",
+    "films",
+    "show",
+    "shows",
+    "tv",
+    "series",
+    "comedy",
+    "drama",
+    "horror",
+    "thriller",
+    "romance",
+    "action",
+    "documentary",
+    "korean",
+    "japanese",
+    "english",
+}
+_KNOWN_STUDIO_ALIASES = {
+    "a24",
+    "blumhouse",
+    "neon",
+    "pixar",
+    "dreamworks",
+    "marvel studios",
+    "studio ghibli",
+    "warner bros",
+    "warner bros.",
+    "universal",
+    "paramount",
+    "lionsgate",
+    "searchlight pictures",
+    "focus features",
+}
+_MAX_WEB_STUDIO_EVIDENCE_LOOKUPS = 12
+_LOCALE_HINTS: dict[str, dict[str, set[str]]] = {
+    "korean": {
+        "aliases": {"korean", "south korean", "korea", "south korea"},
+        "tokens": {"ko", "korean", "kr", "korea", "south korea", "korea, republic of"},
+    },
+    "japanese": {
+        "aliases": {"japanese", "japan"},
+        "tokens": {"ja", "japanese", "jp", "japan"},
+    },
+    "chinese": {
+        "aliases": {"chinese", "china", "mandarin", "cantonese"},
+        "tokens": {"zh", "chinese", "cn", "china", "mandarin", "cantonese", "hong kong", "tw"},
+    },
+    "hindi": {
+        "aliases": {"hindi", "indian", "india", "bollywood"},
+        "tokens": {"hi", "hindi", "in", "india", "indian"},
+    },
+    "spanish": {
+        "aliases": {"spanish", "spain", "latino", "latin american", "mexican"},
+        "tokens": {"es", "spanish", "spain", "mx", "mexico", "latin america", "latino"},
+    },
+    "french": {
+        "aliases": {"french", "france"},
+        "tokens": {"fr", "french", "france"},
+    },
+    "german": {
+        "aliases": {"german", "germany"},
+        "tokens": {"de", "german", "germany"},
+    },
+    "italian": {
+        "aliases": {"italian", "italy"},
+        "tokens": {"it", "italian", "italy"},
+    },
+    "british": {
+        "aliases": {"british", "uk", "united kingdom", "england"},
+        "tokens": {"en", "gb", "uk", "british", "united kingdom", "england", "great britain"},
+    },
+    "american": {
+        "aliases": {"american", "usa", "us", "united states", "hollywood"},
+        "tokens": {"en", "us", "usa", "american", "united states", "hollywood"},
+    },
+}
+
+
+@dataclass
+class FreeTextStrictCriteria:
+    apply_anime: bool = False
+    required_people: list[str] = field(default_factory=list)
+    required_studios: list[str] = field(default_factory=list)
+    has_similarity_cue: bool = False
+    include_genres: set[str] = field(default_factory=set)
+    exclude_genres: set[str] = field(default_factory=set)
+    avoid_terms: set[str] = field(default_factory=set)
+    locale_any_of: list[set[str]] = field(default_factory=list)
+    min_year: int | None = None
+    max_year: int | None = None
+    media_type: str | None = None
 
 
 def _norm_text(value: str | None) -> str:
@@ -47,6 +181,741 @@ def _norm_text(value: str | None) -> str:
 
 def _tokenize(value: str | None) -> set[str]:
     return set(_WORD_RE.findall(_norm_text(value)))
+
+
+def _phrase_in_text(text: str, phrase: str) -> bool:
+    if not text or not phrase:
+        return False
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
+
+
+def _wants_anime_strict_filter(constraints: TonightConstraints) -> bool:
+    text = _norm_text(constraints.free_text)
+    if not text:
+        return False
+    if _ANIME_ONLY_RE.search(text):
+        return True
+    if _SIMILARITY_CUE_RE.search(text):
+        return False
+    return bool(_ANIME_RE.search(text))
+
+
+def _looks_like_person_name(value: str) -> bool:
+    words = [w for w in value.split(" ") if w]
+    if len(words) < 2 or len(words) > 5:
+        return False
+    if any(any(ch.isdigit() for ch in word) for word in words):
+        return False
+    if any(word in _NON_PERSON_TOKENS for word in words):
+        return False
+    return True
+
+
+def _split_people_chunk(value: str) -> list[str]:
+    out: list[str] = []
+    for part in re.split(r"\s*(?:,| and | & )\s*", value):
+        candidate = " ".join(part.split()).strip(" ,.-")
+        if not candidate:
+            continue
+        words = candidate.split(" ")
+        if words and words[-1] in {"show", "shows", "movie", "movies", "tv", "series", "films"}:
+            words = words[:-1]
+        normalized = " ".join(words).strip()
+        if not normalized or not _looks_like_person_name(normalized):
+            continue
+        out.append(normalized)
+    return out
+
+
+def _extract_requested_people(text: str) -> list[str]:
+    if not text:
+        return []
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for match in _PEOPLE_CUE_RE.finditer(text):
+        raw_chunk = (match.group(1) or "").strip()
+        if not raw_chunk:
+            continue
+        chunk = _PEOPLE_STOP_RE.split(raw_chunk, maxsplit=1)[0].strip(" ,.-")
+        if not chunk:
+            continue
+        for candidate in _split_people_chunk(chunk):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            requested.append(candidate)
+
+    for match in _PEOPLE_POSSESSIVE_RE.finditer(text):
+        candidate = " ".join((match.group(1) or "").split())
+        if not candidate or candidate in seen:
+            continue
+        if not _looks_like_person_name(candidate):
+            continue
+        seen.add(candidate)
+        requested.append(candidate)
+
+    return requested
+
+
+def _normalize_company_name(value: str) -> str:
+    normalized = _norm_text(value)
+    normalized = re.sub(r"\b(?:pictures?|studios?|productions?|entertainment|films?)\b", "", normalized)
+    normalized = " ".join(normalized.split())
+    return normalized
+
+
+def _extract_requested_studios(text: str) -> list[str]:
+    if not text:
+        return []
+
+    requested: list[str] = []
+    seen: set[str] = set()
+
+    for regex in (_STUDIO_CUE_RE, _STUDIO_WORD_RE):
+        for match in regex.finditer(text):
+            raw_chunk = (match.group(1) or "").strip()
+            if not raw_chunk:
+                continue
+            chunk = _PEOPLE_STOP_RE.split(raw_chunk, maxsplit=1)[0].strip(" ,.-")
+            if not chunk:
+                continue
+            for part in re.split(r"\s*(?:,| and | & )\s*", chunk):
+                candidate = " ".join(part.split()).strip(" ,.-")
+                if not candidate:
+                    continue
+                words = candidate.split(" ")
+                if len(words) > 6:
+                    continue
+                normalized = _normalize_company_name(candidate)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                requested.append(normalized)
+
+    for alias in _KNOWN_STUDIO_ALIASES:
+        if not _phrase_in_text(text, alias):
+            continue
+        normalized = _normalize_company_name(alias)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        requested.append(normalized)
+
+    return requested
+
+
+def _extract_year_bounds(text: str) -> tuple[int | None, int | None]:
+    min_year: int | None = None
+    max_year: int | None = None
+
+    between = _YEAR_BETWEEN_RE.search(text)
+    if between:
+        a = int(between.group(1))
+        b = int(between.group(2))
+        min_year, max_year = (a, b) if a <= b else (b, a)
+
+    for match in _YEAR_AFTER_RE.finditer(text):
+        year = int(match.group(1))
+        min_year = max(min_year or year, year)
+
+    for match in _YEAR_BEFORE_RE.finditer(text):
+        year = int(match.group(1))
+        max_year = min(max_year or year, year)
+
+    decade = _YEAR_DECADE_RE.search(text)
+    if decade:
+        decade_start = int(decade.group(1))
+        min_year = max(min_year or decade_start, decade_start)
+        decade_end = decade_start + 9
+        max_year = min(max_year or decade_end, decade_end)
+
+    if min_year and max_year and min_year > max_year:
+        return None, None
+    return min_year, max_year
+
+
+def _extract_media_type_filter(text: str, constraints: TonightConstraints) -> str | None:
+    if constraints.format in {"movie", "tv"}:
+        return constraints.format
+    movie_only = bool(_MOVIE_ONLY_RE.search(text))
+    tv_only = bool(_TV_ONLY_RE.search(text))
+    if movie_only and not tv_only:
+        return "movie"
+    if tv_only and not movie_only:
+        return "tv"
+    return None
+
+
+def _extract_locale_groups(text: str) -> list[set[str]]:
+    groups: list[set[str]] = []
+    for profile in _LOCALE_HINTS.values():
+        aliases = profile["aliases"]
+        if any(_phrase_in_text(text, alias) for alias in aliases):
+            groups.append(set(profile["tokens"]))
+    return groups
+
+
+def _is_alias_negated(text: str, alias: str) -> bool:
+    if not alias:
+        return False
+    pattern = re.compile(
+        rf"\b(?:no|not|without|avoid|avoiding|except|excluding|anything but)\s+(?:any\s+)?{re.escape(alias)}(?:s|es)?\b"
+    )
+    return bool(pattern.search(text))
+
+
+def _extract_genre_signals(text: str) -> tuple[set[str], set[str]]:
+    include: set[str] = set()
+    exclude: set[str] = set()
+    alias_items = sorted(TAG_ALIASES.items(), key=lambda item: len(item[0]), reverse=True)
+    for alias, canonical in alias_items:
+        if len(alias) < 3:
+            continue
+        if not _phrase_in_text(text, alias):
+            continue
+        if _is_alias_negated(text, alias):
+            exclude.add(canonical)
+        else:
+            include.add(canonical)
+    include -= exclude
+    return include, exclude
+
+
+def _extract_avoid_terms(text: str, constraints: TonightConstraints) -> set[str]:
+    out: set[str] = set()
+    for value in constraints.avoid:
+        normalized = _norm_text(value)
+        if normalized:
+            out.add(normalized)
+
+    for match in re.finditer(
+        r"\b(?:no|not|without|avoid|avoiding|except|excluding|anything but)\s+([a-z0-9' -]{2,40})",
+        text,
+    ):
+        raw = (match.group(1) or "").strip()
+        chunk = _PEOPLE_STOP_RE.split(raw, maxsplit=1)[0].strip(" ,.-")
+        if not chunk:
+            continue
+        for part in re.split(r"\s*(?:,| and | & )\s*", chunk):
+            term = " ".join(part.split()).strip(" ,.-")
+            if not term:
+                continue
+            words = term.split()
+            if len(words) > 4:
+                continue
+            if term in {"movie", "movies", "show", "shows", "tv", "series"}:
+                continue
+            out.add(term)
+    return out
+
+
+def _extract_free_text_strict_criteria(constraints: TonightConstraints) -> FreeTextStrictCriteria:
+    text = _norm_text(constraints.free_text)
+    if not text:
+        return FreeTextStrictCriteria()
+
+    include_genres, exclude_genres = _extract_genre_signals(text)
+    has_similarity_cue = bool(_SIMILARITY_CUE_RE.search(text))
+    for value in constraints.avoid:
+        canonical = _canonicalize_mood(value)
+        if canonical:
+            exclude_genres.add(canonical)
+
+    min_year, max_year = _extract_year_bounds(text)
+    return FreeTextStrictCriteria(
+        apply_anime=_wants_anime_strict_filter(constraints),
+        required_people=_extract_requested_people(text),
+        required_studios=_extract_requested_studios(text),
+        has_similarity_cue=has_similarity_cue,
+        include_genres=include_genres,
+        exclude_genres=exclude_genres,
+        avoid_terms=_extract_avoid_terms(text, constraints),
+        locale_any_of=_extract_locale_groups(text),
+        min_year=min_year,
+        max_year=max_year,
+        media_type=_extract_media_type_filter(text, constraints),
+    )
+
+
+def _is_anime_candidate(
+    *,
+    item: WatchlistItem,
+    taxonomy: tuple[set[str], set[str], set[int]] | None,
+) -> bool:
+    title = item.title
+    text_blob = _norm_text(f"{title.name} {title.overview or ''}")
+    text_tokens = _tokenize(text_blob)
+
+    genres, keywords, genre_ids = taxonomy or (set(), set(), set())
+    score = 0
+    if "anime" in text_blob:
+        score += 4
+    if genre_ids & _ANIME_GENRE_IDS:
+        score += 2
+    if keywords & _ANIME_KEYWORDS:
+        score += 4
+    if "anime" in genres:
+        score += 2
+    if text_tokens & {"anime", "manga", "otaku"}:
+        score += 2
+
+    # Require stronger evidence than plain "animation" alone.
+    return score >= 4
+
+
+def _matches_requested_people(
+    *,
+    item: WatchlistItem,
+    requested_people: list[str],
+    tmdb_people: set[str] | None,
+) -> bool:
+    if not requested_people:
+        return True
+
+    title = item.title
+    text_blob = _norm_text(f"{title.name} {title.overview or ''}")
+    known_people = tmdb_people or set()
+    for person in requested_people:
+        if person in known_people:
+            continue
+        if person in text_blob:
+            continue
+        return False
+    return True
+
+
+def _matches_requested_studios(
+    *,
+    item: WatchlistItem,
+    requested_studios: list[str],
+    tmdb_companies: set[str] | None,
+) -> bool:
+    if not requested_studios:
+        return True
+
+    title = item.title
+    text_blob = _norm_text(f"{title.name} {title.overview or ''}")
+    known_companies = {
+        _normalize_company_name(value)
+        for value in (tmdb_companies or set())
+        if isinstance(value, str) and _normalize_company_name(value)
+    }
+
+    def _matches(studio: str) -> bool:
+        normalized_studio = _normalize_company_name(studio)
+        if not normalized_studio:
+            return False
+        if normalized_studio in known_companies:
+            return True
+        if normalized_studio in text_blob:
+            return True
+        for company in known_companies:
+            if normalized_studio in company or company in normalized_studio:
+                return True
+        return False
+
+    return any(_matches(studio) for studio in requested_studios)
+
+
+def _matches_year_window(
+    *,
+    item: WatchlistItem,
+    min_year: int | None,
+    max_year: int | None,
+) -> bool:
+    if min_year is None and max_year is None:
+        return True
+    year = item.title.release_year
+    if year is None:
+        return False
+    if min_year is not None and year < min_year:
+        return False
+    if max_year is not None and year > max_year:
+        return False
+    return True
+
+
+def _normalize_tmdb_locale_payload(payload: Any) -> set[str]:
+    if isinstance(payload, set):
+        return {_norm_text(str(v)) for v in payload if isinstance(v, str) and _norm_text(v)}
+    if isinstance(payload, list):
+        return {_norm_text(str(v)) for v in payload if isinstance(v, str) and _norm_text(v)}
+    return set()
+
+
+def _matching_genres_for_item(
+    *,
+    item: WatchlistItem,
+    taxonomy: tuple[set[str], set[str], set[int]] | None,
+) -> set[str]:
+    tmdb_genres, tmdb_keywords, tmdb_genre_ids = taxonomy or (set(), set(), set())
+    matched: set[str] = set()
+
+    text_blob = _norm_text(f"{item.title.name} {item.title.overview or ''}")
+    for alias, canonical in TAG_ALIASES.items():
+        if len(alias) < 3:
+            continue
+        if _phrase_in_text(text_blob, alias):
+            matched.add(canonical)
+
+    for canonical, genre_ids in TAG_GENRE_IDS.items():
+        if tmdb_genre_ids & genre_ids:
+            matched.add(canonical)
+
+    for canonical, profile in TAG_PROFILES.items():
+        if (tmdb_genres & profile["genres"]) or (tmdb_keywords & profile["keywords"]):
+            matched.add(canonical)
+
+    return matched
+
+
+def _matches_genre_constraints(
+    *,
+    item: WatchlistItem,
+    taxonomy: tuple[set[str], set[str], set[int]] | None,
+    include_genres: set[str],
+    exclude_genres: set[str],
+) -> bool:
+    if not include_genres and not exclude_genres:
+        return True
+
+    matched_genres = _matching_genres_for_item(item=item, taxonomy=taxonomy)
+    if include_genres and not (matched_genres & include_genres):
+        return False
+    if exclude_genres and (matched_genres & exclude_genres):
+        return False
+    return True
+
+
+def _matches_avoid_terms(
+    *,
+    item: WatchlistItem,
+    taxonomy: tuple[set[str], set[str], set[int]] | None,
+    avoid_terms: set[str],
+) -> bool:
+    if not avoid_terms:
+        return True
+
+    text_blob = _norm_text(f"{item.title.name} {item.title.overview or ''}")
+    tmdb_genres, tmdb_keywords, _ = taxonomy or (set(), set(), set())
+    for term in avoid_terms:
+        if not term:
+            continue
+        if term in text_blob:
+            return False
+        if any(term in value or value in term for value in tmdb_genres):
+            return False
+        if any(term in value or value in term for value in tmdb_keywords):
+            return False
+    return True
+
+
+def _matches_locale_constraints(
+    *,
+    item: WatchlistItem,
+    locale_tokens: set[str] | None,
+    locale_any_of: list[set[str]],
+) -> bool:
+    if not locale_any_of:
+        return True
+
+    text_blob = _norm_text(f"{item.title.name} {item.title.overview or ''}")
+    tokens = {t for t in (locale_tokens or set()) if t}
+    for group in locale_any_of:
+        if tokens & group:
+            return True
+        long_terms = {v for v in group if len(v) >= 4}
+        if any(term in text_blob for term in long_terms):
+            return True
+    return False
+
+
+def _has_strict_criteria(criteria: FreeTextStrictCriteria) -> bool:
+    return any(
+        [
+            criteria.apply_anime,
+            bool(criteria.required_people),
+            bool(criteria.required_studios),
+            bool(criteria.include_genres),
+            bool(criteria.exclude_genres),
+            bool(criteria.avoid_terms),
+            bool(criteria.locale_any_of),
+            criteria.min_year is not None,
+            criteria.max_year is not None,
+            criteria.media_type in {"movie", "tv"},
+        ]
+    )
+
+
+async def _build_ai_candidate_payload(
+    *,
+    items: list[WatchlistItem],
+    include_web_company_evidence: bool = False,
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+
+    taxonomy_map: dict[uuid.UUID, tuple[set[str], set[str], set[int]]] = {}
+    people_map: dict[uuid.UUID, set[str]] = {}
+    company_map: dict[uuid.UUID, set[str]] = {}
+    web_company_map: dict[uuid.UUID, set[str]] = {}
+    locale_map: dict[uuid.UUID, set[str]] = {}
+    max_web_lookups = max(0, _MAX_WEB_STUDIO_EVIDENCE_LOOKUPS)
+
+    async def _enrich(idx: int, it: WatchlistItem) -> None:
+        t = it.title
+        if t.source != "tmdb" or not t.source_id:
+            return
+        try:
+            tmdb_id = int(t.source_id)
+        except (TypeError, ValueError):
+            return
+
+        taxonomy = await fetch_tmdb_title_taxonomy(
+            tmdb_id=tmdb_id,
+            media_type=t.media_type,
+        )
+        taxonomy_map[it.id] = _normalize_tmdb_taxonomy_payload(taxonomy)
+
+        people = await fetch_tmdb_title_people_names(
+            tmdb_id=tmdb_id,
+            media_type=t.media_type,
+        )
+        people_map[it.id] = {_norm_text(v) for v in people if isinstance(v, str)}
+
+        companies = await fetch_tmdb_title_company_names(
+            tmdb_id=tmdb_id,
+            media_type=t.media_type,
+        )
+        company_map[it.id] = {
+            _normalize_company_name(v)
+            for v in companies
+            if isinstance(v, str) and _normalize_company_name(v)
+        }
+        if include_web_company_evidence and idx < max_web_lookups:
+            web_companies = await fetch_web_title_company_names(
+                title=t.name,
+                release_year=t.release_year,
+                media_type=t.media_type,
+            )
+            web_company_map[it.id] = {
+                _normalize_company_name(v)
+                for v in web_companies
+                if isinstance(v, str) and _normalize_company_name(v)
+            }
+
+        locale_tokens = await fetch_tmdb_title_locale_tokens(
+            tmdb_id=tmdb_id,
+            media_type=t.media_type,
+        )
+        locale_map[it.id] = _normalize_tmdb_locale_payload(locale_tokens)
+
+    await asyncio.gather(*[_enrich(idx, it) for idx, it in enumerate(items)])
+
+    payload: list[dict[str, Any]] = []
+    for it in items:
+        t = it.title
+        tmdb_genres, tmdb_keywords, tmdb_genre_ids = taxonomy_map.get(
+            it.id,
+            (set(), set(), set()),
+        )
+        payload.append(
+            {
+                "id": str(it.id),
+                "title": t.name,
+                "release_year": t.release_year,
+                "media_type": t.media_type,
+                "runtime_minutes": t.runtime_minutes,
+                "overview": t.overview,
+                "tmdb_genres": sorted(tmdb_genres),
+                "tmdb_keywords": sorted(tmdb_keywords),
+                "tmdb_genre_ids": sorted(tmdb_genre_ids),
+                "tmdb_people": sorted(people_map.get(it.id, set())),
+                "tmdb_companies": sorted(company_map.get(it.id, set())),
+                "web_companies": sorted(web_company_map.get(it.id, set())),
+                "tmdb_locale_tokens": sorted(locale_map.get(it.id, set())),
+            }
+        )
+
+    return payload
+
+
+def _normalize_tmdb_taxonomy_payload(
+    payload: Any,
+) -> tuple[set[str], set[str], set[int]]:
+    if isinstance(payload, tuple) and len(payload) == 3:
+        genres, keywords, genre_ids = payload
+        return (
+            {str(v) for v in genres if isinstance(v, str)},
+            {str(v) for v in keywords if isinstance(v, str)},
+            {int(v) for v in genre_ids if isinstance(v, int)},
+        )
+    if isinstance(payload, tuple) and len(payload) == 2:
+        genres, keywords = payload
+        return (
+            {str(v) for v in genres if isinstance(v, str)},
+            {str(v) for v in keywords if isinstance(v, str)},
+            set(),
+        )
+    return set(), set(), set()
+
+
+async def _apply_free_text_strict_filters(
+    *,
+    items: list[WatchlistItem],
+    constraints: TonightConstraints,
+) -> list[WatchlistItem]:
+    if not items:
+        return []
+
+    criteria = _extract_free_text_strict_criteria(constraints)
+    if not _has_strict_criteria(criteria):
+        return items
+
+    taxonomy_map: dict[uuid.UUID, tuple[set[str], set[str], set[int]]] = {}
+    people_map: dict[uuid.UUID, set[str]] = {}
+    company_map: dict[uuid.UUID, set[str]] = {}
+    locale_map: dict[uuid.UUID, set[str]] = {}
+    needs_taxonomy = any(
+        [
+            criteria.apply_anime,
+            bool(criteria.include_genres),
+            bool(criteria.exclude_genres),
+            bool(criteria.avoid_terms),
+        ]
+    )
+    needs_people = bool(criteria.required_people)
+    needs_companies = bool(criteria.required_studios)
+    needs_locale = bool(criteria.locale_any_of)
+    needs_web_company_evidence = needs_companies and not criteria.has_similarity_cue
+    web_lookup_lock = asyncio.Lock()
+    web_lookups_used = 0
+
+    async def _enrich(it: WatchlistItem) -> None:
+        t = it.title
+        if t.source != "tmdb" or not t.source_id:
+            return
+        try:
+            tmdb_id = int(t.source_id)
+        except (TypeError, ValueError):
+            return
+
+        if needs_taxonomy:
+            taxonomy = await fetch_tmdb_title_taxonomy(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            taxonomy_map[it.id] = _normalize_tmdb_taxonomy_payload(taxonomy)
+
+        if needs_people:
+            people = await fetch_tmdb_title_people_names(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            people_map[it.id] = {_norm_text(v) for v in people if isinstance(v, str)}
+
+        if needs_companies:
+            companies = await fetch_tmdb_title_company_names(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            company_map[it.id] = {
+                _normalize_company_name(v)
+                for v in companies
+                if isinstance(v, str) and _normalize_company_name(v)
+            }
+            if needs_web_company_evidence and not _matches_requested_studios(
+                item=it,
+                requested_studios=criteria.required_studios,
+                tmdb_companies=company_map.get(it.id, set()),
+            ):
+                allow_lookup = False
+                nonlocal web_lookups_used
+                async with web_lookup_lock:
+                    if web_lookups_used < _MAX_WEB_STUDIO_EVIDENCE_LOOKUPS:
+                        web_lookups_used += 1
+                        allow_lookup = True
+                if allow_lookup:
+                    web_companies = await fetch_web_title_company_names(
+                        title=t.name,
+                        release_year=t.release_year,
+                        media_type=t.media_type,
+                    )
+                    if web_companies:
+                        company_map[it.id].update(
+                            _normalize_company_name(v)
+                            for v in web_companies
+                            if isinstance(v, str) and _normalize_company_name(v)
+                        )
+
+        if needs_locale:
+            locale_tokens = await fetch_tmdb_title_locale_tokens(
+                tmdb_id=tmdb_id,
+                media_type=t.media_type,
+            )
+            locale_map[it.id] = _normalize_tmdb_locale_payload(locale_tokens)
+
+    await asyncio.gather(*[_enrich(it) for it in items])
+
+    out: list[WatchlistItem] = []
+    for it in items:
+        if criteria.media_type in {"movie", "tv"} and it.title.media_type != criteria.media_type:
+            continue
+        if not _matches_year_window(
+            item=it,
+            min_year=criteria.min_year,
+            max_year=criteria.max_year,
+        ):
+            continue
+        taxonomy = taxonomy_map.get(it.id)
+        if criteria.apply_anime and not _is_anime_candidate(
+            item=it,
+            taxonomy=taxonomy,
+        ):
+            continue
+        if (
+            criteria.required_people
+            and not criteria.has_similarity_cue
+            and not _matches_requested_people(
+                item=it,
+                requested_people=criteria.required_people,
+                tmdb_people=people_map.get(it.id, set()),
+            )
+        ):
+            continue
+        if (
+            criteria.required_studios
+            and not criteria.has_similarity_cue
+            and not _matches_requested_studios(
+                item=it,
+                requested_studios=criteria.required_studios,
+                tmdb_companies=company_map.get(it.id, set()),
+            )
+        ):
+            continue
+        if not _matches_genre_constraints(
+            item=it,
+            taxonomy=taxonomy,
+            include_genres=criteria.include_genres,
+            exclude_genres=criteria.exclude_genres,
+        ):
+            continue
+        if not _matches_avoid_terms(
+            item=it,
+            taxonomy=taxonomy,
+            avoid_terms=criteria.avoid_terms,
+        ):
+            continue
+        if not _matches_locale_constraints(
+            item=it,
+            locale_tokens=locale_map.get(it.id),
+            locale_any_of=criteria.locale_any_of,
+        ):
+            continue
+        out.append(it)
+
+    return out
 
 
 TAG_PROFILES: dict[str, dict[str, set[str]]] = {
@@ -265,12 +1134,24 @@ TAG_ALIASES: dict[str, str] = {
     "cozy": "cozy",
     "feel good": "feel-good",
     "feel-good": "feel-good",
+    "happy": "feel-good",
+    "uplifting": "feel-good",
+    "lighthearted": "feel-good",
+    "light-hearted": "feel-good",
+    "wholesome": "feel-good",
     "dark comedy": "dark comedy",
     "black comedy": "dark comedy",
     "thrilling": "thrilling",
     "thriller": "thrilling",
     "slow burn": "slow burn",
     "heartfelt": "heartfelt",
+    "sad": "heartfelt",
+    "bittersweet": "heartfelt",
+    "melancholy": "heartfelt",
+    "tearjerker": "heartfelt",
+    "tear-jerker": "heartfelt",
+    "depressing": "heartfelt",
+    "emotional": "heartfelt",
     "epic": "epic",
     "nostalgic": "nostalgic",
     "romantic": "romantic",
@@ -1104,6 +1985,10 @@ async def _generate_user_deck_items(
     )
     eligible = (await db.execute(q)).scalars().all()
     filtered = _apply_hard_filters(eligible, refined)
+    filtered = await _apply_free_text_strict_filters(
+        items=filtered,
+        constraints=refined,
+    )
     if not filtered:
         return [], refined, False, None
 
@@ -1132,19 +2017,11 @@ async def _generate_user_deck_items(
     if final_n <= 0:
         return [], refined, False, None
 
-    candidates_payload: list[dict[str, Any]] = []
-    for it in prelim:
-        t = it.title
-        candidates_payload.append(
-            {
-                "id": str(it.id),
-                "title": t.name,
-                "release_year": t.release_year,
-                "media_type": t.media_type,
-                "runtime_minutes": t.runtime_minutes,
-                "overview": t.overview,
-            }
-        )
+    criteria_for_payload = _extract_free_text_strict_criteria(refined)
+    candidates_payload = await _build_ai_candidate_payload(
+        items=prelim,
+        include_web_company_evidence=bool(criteria_for_payload.required_studios),
+    )
 
     final_order: list[WatchlistItem] = list(prelim[:final_n])
     ai_why: str | None = None
@@ -1416,6 +2293,9 @@ async def create_tonight_session(
     user_key = str(user_id)
     if phase == "collecting" and user_key not in collecting["user_joined_at"]:
         collecting["user_joined_at"][user_key] = _to_iso(now)
+    if phase == "collecting" and confirm_ready is False:
+        # Explicit "back/edit" action from the UI: keep the draft deck but clear ready state.
+        collecting["user_dealt_at"].pop(user_key, None)
 
     if phase == "collecting" and has_user_preferences:
         deck_items, refined, ai_used, ai_why = await _generate_user_deck_items(
