@@ -56,6 +56,70 @@ async def test_vote_upserts_and_is_blind(async_client, user_factory, login_helpe
 
 
 @pytest.mark.anyio
+async def test_user_can_undo_vote_before_round_completes(
+    async_client,
+    monkeypatch,
+    user_factory,
+    login_helper,
+):
+    from app.api.routes import sessions as session_routes
+
+    broadcasts: list[tuple[str, str]] = []
+
+    async def fake_broadcast(session_id, *, reason: str):
+        broadcasts.append((str(session_id), reason))
+
+    monkeypatch.setattr(
+        session_routes.session_realtime_hub,
+        "broadcast_session_updated",
+        fake_broadcast,
+    )
+
+    user = await user_factory(async_client, display_name="Undo")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group_id = group["id"]
+    for tmdb_id, title in ((901, "A"), (902, "B")):
+        await async_client.post(
+            f"/groups/{group_id}/watchlist",
+            json={
+                "type": "tmdb",
+                "tmdb_id": tmdb_id,
+                "media_type": "movie",
+                "title": title,
+                "year": 2000,
+                "poster_path": None,
+            },
+        )
+
+    session = (
+        await async_client.post(
+            f"/groups/{group_id}/sessions",
+            json={"constraints": {"format": "any"}, "duration_seconds": 90, "candidate_count": 5},
+        )
+    ).json()
+    session_id = session["session_id"]
+    item_id = session["candidates"][0]["watchlist_item_id"]
+
+    vote = await async_client.post(
+        f"/sessions/{session_id}/vote",
+        json={"watchlist_item_id": item_id, "vote": "yes"},
+    )
+    assert vote.status_code == 200, vote.text
+
+    undo = await async_client.delete(f"/sessions/{session_id}/vote/{item_id}")
+    assert undo.status_code == 200, undo.text
+    assert undo.json() == {"ok": True}
+    assert (session_id, "vote_undone") in broadcasts
+
+    revote = await async_client.post(
+        f"/sessions/{session_id}/vote",
+        json={"watchlist_item_id": item_id, "vote": "no"},
+    )
+    assert revote.status_code == 200, revote.text
+
+
+@pytest.mark.anyio
 async def test_resolve_on_expiry_picks_max_yes_then_min_no(
     async_client, client_factory, user_factory, login_helper
 ):

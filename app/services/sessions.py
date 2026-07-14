@@ -2530,6 +2530,48 @@ async def cast_vote(
     await db.flush()
 
 
+async def undo_vote(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_id: uuid.UUID,
+    watchlist_item_id: uuid.UUID,
+) -> None:
+    s = await _load_session_with_candidates(db, session_id)
+    await assert_user_in_group(db, s.group_id, user_id)
+    await _assert_session_active(s)
+
+    now = datetime.now(timezone.utc)
+    runtime = _ensure_runtime(s)
+    phase = str(runtime.get("phase") or "swiping")
+    if phase not in {"swiping", "tiebreak"}:
+        raise ValueError("Deck is not ready for voting changes")
+
+    current_round = int(runtime.get("round") or 1)
+    candidate_ids = _candidate_ids_for_round(s, runtime, current_round)
+    if watchlist_item_id not in set(candidate_ids):
+        raise ValueError("watchlist_item_id is not in this session deck")
+
+    user_votes = _user_votes_for_round(runtime, round_num=current_round, user_id=user_id)
+    user_votes.pop(str(watchlist_item_id), None)
+
+    round_state = _runtime_round_state(runtime, current_round)
+    locked_at = round_state["user_locked_at"]
+    locked_at.pop(str(user_id), None)
+    _ensure_user_timer(runtime, round_num=current_round, user_id=user_id, now=now)
+
+    await db.execute(
+        sa.delete(TonightVote).where(
+            TonightVote.session_id == session_id,
+            TonightVote.user_id == user_id,
+            TonightVote.watchlist_item_id == watchlist_item_id,
+        )
+    )
+
+    _persist_runtime(s, runtime)
+    await db.flush()
+
+
 async def resolve_if_expired(db: AsyncSession, *, session_id: uuid.UUID) -> TonightSession:
     s = await _load_session_with_candidates(db, session_id)
 

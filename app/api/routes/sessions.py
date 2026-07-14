@@ -29,6 +29,7 @@ from app.services.sessions import (
     get_session_state,
     set_session_watch_party_url,
     shuffle_and_complete,
+    undo_vote,
 )
 from app.services.session_realtime import session_realtime_hub
 
@@ -187,6 +188,29 @@ async def vote_route(
         )
         await db.commit()
         await session_realtime_hub.broadcast_session_updated(session_id, reason="vote_cast")
+        return {"ok": True}
+    except PermissionError as e:
+        raise permission_error(e) from e
+    except ValueError as e:
+        raise _session_value_error(e, include_not_found=True) from e
+
+
+@router.delete("/sessions/{session_id}/vote/{watchlist_item_id}", status_code=200)
+async def undo_vote_route(
+    session_id: UUID,
+    watchlist_item_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        await undo_vote(
+            db,
+            session_id=session_id,
+            user_id=user.id,
+            watchlist_item_id=watchlist_item_id,
+        )
+        await db.commit()
+        await session_realtime_hub.broadcast_session_updated(session_id, reason="vote_undone")
         return {"ok": True}
     except PermissionError as e:
         raise permission_error(e) from e
