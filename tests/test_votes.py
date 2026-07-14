@@ -348,3 +348,65 @@ async def test_group_leader_can_end_session(async_client, client_factory, user_f
 
         ended = (await async_client.post(f"/sessions/{session_id}/end")).json()
         assert ended["status"] == "complete"
+        assert ended["ended_by_leader"] is True
+
+
+@pytest.mark.anyio
+async def test_group_leader_end_marks_completed_session_ended_for_members(
+    async_client,
+    client_factory,
+    user_factory,
+    login_helper,
+):
+    async with client_factory() as client_b:
+        user_a = await user_factory(async_client, display_name="A")
+        await login_helper(async_client, email=user_a["email"], password=user_a["password"])
+        user_b = await user_factory(client_b, display_name="B")
+        await login_helper(client_b, email=user_b["email"], password=user_b["password"])
+
+        invite_b = (await async_client.post("/friends/invite")).json()["code"]
+        await client_b.post("/friends/accept", json={"code": invite_b})
+        friends = (await async_client.get("/friends")).json()
+        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+
+        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group_id = group["id"]
+        for tmdb_id, title in ((811, "A"), (812, "B")):
+            await async_client.post(
+                f"/groups/{group_id}/watchlist",
+                json={
+                    "type": "tmdb",
+                    "tmdb_id": tmdb_id,
+                    "media_type": "movie",
+                    "title": title,
+                    "year": 2000,
+                    "poster_path": None,
+                },
+            )
+
+        created = (
+            await async_client.post(
+                f"/groups/{group_id}/sessions",
+                json={"constraints": {"format": "any"}, "duration_seconds": 90, "candidate_count": 5},
+            )
+        ).json()
+        session_id = created["session_id"]
+        member_join = await client_b.post(
+            f"/groups/{group_id}/sessions",
+            json={"constraints": {"format": "any"}, "duration_seconds": 90, "candidate_count": 5},
+        )
+        assert member_join.status_code == 201, member_join.text
+
+        completed = await async_client.post(f"/sessions/{session_id}/shuffle")
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["status"] == "complete"
+        assert completed.json()["ended_by_leader"] is False
+
+        ended = await async_client.post(f"/sessions/{session_id}/end")
+        assert ended.status_code == 200, ended.text
+        assert ended.json()["ended_by_leader"] is True
+
+        member_state = await client_b.get(f"/sessions/{session_id}")
+        assert member_state.status_code == 200, member_state.text
+        assert member_state.json()["status"] == "complete"
+        assert member_state.json()["ended_by_leader"] is True

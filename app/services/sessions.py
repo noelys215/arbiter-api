@@ -2684,16 +2684,16 @@ async def end_session(db: AsyncSession, *, session_id: uuid.UUID, user_id: uuid.
         raise PermissionError("Only the group leader can end this session")
 
     now = datetime.now(timezone.utc)
+    runtime = _ensure_runtime(s)
     if s.status == "active":
-        runtime = _ensure_runtime(s)
         s.status = "complete"
         s.completed_at = now
         runtime["phase"] = "swiping"
         runtime["tie_break_required"] = False
         runtime["tie_break_candidate_ids"] = []
-        runtime["ended_by_leader"] = True
-        _persist_runtime(s, runtime)
-        await db.flush()
+    runtime["ended_by_leader"] = True
+    _persist_runtime(s, runtime)
+    await db.flush()
     return await _build_session_state_view(db, s=s, user_id=user_id, now=now)
 
 
