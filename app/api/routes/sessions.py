@@ -146,7 +146,7 @@ async def create_session_route(
                     )
                 )
 
-        return CreateSessionResponse(
+        response = CreateSessionResponse(
             session_id=sess.id,
             ends_at=sess.ends_at,
             constraints=constraints,
@@ -162,6 +162,8 @@ async def create_session_route(
             candidates=candidates_out,
             personal_candidates=personal_out,
         )
+        await session_realtime_hub.broadcast_session_updated(sess.id, reason="session_changed")
+        return response
 
     except PermissionError as e:
         raise permission_error(e) from e
@@ -184,6 +186,7 @@ async def vote_route(
             vote=payload.vote,
         )
         await db.commit()
+        await session_realtime_hub.broadcast_session_updated(session_id, reason="vote_cast")
         return {"ok": True}
     except PermissionError as e:
         raise permission_error(e) from e
@@ -246,7 +249,9 @@ async def shuffle_route(
     try:
         view = await shuffle_and_complete(db, session_id=session_id, user_id=user.id)
         await db.commit()
-        return await _session_state_response_from_view(view)
+        response = await _session_state_response_from_view(view)
+        await session_realtime_hub.broadcast_session_updated(session_id, reason="shuffle_completed")
+        return response
     except PermissionError as e:
         raise permission_error(e) from e
     except ValueError as e:
@@ -262,7 +267,9 @@ async def end_session_route(
     try:
         view = await end_session(db, session_id=session_id, user_id=user.id)
         await db.commit()
-        return await _session_state_response_from_view(view)
+        response = await _session_state_response_from_view(view)
+        await session_realtime_hub.broadcast_session_updated(session_id, reason="session_ended")
+        return response
     except PermissionError as e:
         raise permission_error(e) from e
     except ValueError as e:
@@ -284,7 +291,9 @@ async def update_watch_party_route(
             url=payload.url,
         )
         await db.commit()
-        return await _session_state_response_from_view(view)
+        response = await _session_state_response_from_view(view)
+        await session_realtime_hub.broadcast_session_updated(session_id, reason="watch_party_updated")
+        return response
     except PermissionError as e:
         raise permission_error(e) from e
     except ValueError as e:

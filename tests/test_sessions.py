@@ -24,9 +24,23 @@ async def test_create_session_requires_membership(async_client, user_factory, lo
 @pytest.mark.anyio
 async def test_group_leader_can_set_watch_party_link_and_members_can_read(
     async_client,
+    monkeypatch,
     user_factory,
     login_helper,
 ):
+    from app.api.routes import sessions as session_routes
+
+    broadcasts: list[tuple[str, str]] = []
+
+    async def fake_broadcast(session_id, *, reason: str):
+        broadcasts.append((str(session_id), reason))
+
+    monkeypatch.setattr(
+        session_routes.session_realtime_hub,
+        "broadcast_session_updated",
+        fake_broadcast,
+    )
+
     leader = await user_factory(async_client, display_name="Leader")
     await login_helper(async_client, email=leader["email"], password=leader["password"])
     group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
@@ -89,6 +103,7 @@ async def test_group_leader_can_set_watch_party_link_and_members_can_read(
     )
     assert set_link.status_code == 200, set_link.text
     assert set_link.json()["watch_party_url"] == party_url
+    assert (session_id, "watch_party_updated") in broadcasts
 
     await login_helper(async_client, email=member["email"], password=member["password"])
     state = await async_client.get(f"/sessions/{session_id}")
