@@ -208,13 +208,16 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
         assert summaries[i1["id"]]["total_count"] == 1
         assert summaries[i1["id"]]["is_leading"] is True
         assert summaries[i1["id"]]["voters"] == [
-            {
-                "user_id": user_a["id"],
-                "display_name": "A",
-                "avatar_url": None,
-                "vote": "yes",
-            }
-        ]
+                {
+                    "user_id": user_a["id"],
+                    "display_name": "A",
+                    "avatar_url": None,
+                    "avatar_source": None,
+                    "avatar_style": None,
+                    "avatar_seed": None,
+                    "vote": "yes",
+                }
+            ]
         assert summaries[i2["id"]]["yes_count"] == 1
         assert summaries[i2["id"]]["no_count"] == 1
         assert summaries[i2["id"]]["total_count"] == 2

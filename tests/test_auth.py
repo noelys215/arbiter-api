@@ -160,6 +160,8 @@ async def test_local_auth_bypass_requires_configuration(client, monkeypatch):
     monkeypatch.setattr(auth_routes.settings, "env", "test")
     monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", None)
     monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", None)
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_secondary_token", None)
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_secondary_email", None)
 
     response = await client.post("/auth/local-bypass", json={"token": "test-token"})
 
