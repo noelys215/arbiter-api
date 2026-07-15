@@ -37,6 +37,10 @@ class LoginResponse(BaseModel):
     ok: bool
 
 
+class LocalAuthBypassRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=512)
+
+
 class MagicLinkRequest(BaseModel):
     email: EmailStr
 

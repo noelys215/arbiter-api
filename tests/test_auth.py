@@ -152,3 +152,64 @@ async def test_magic_link_verify_rejects_invalid_token(client):
     response = await client.get("/auth/magic-link/verify?token=invalid", follow_redirects=False)
     assert response.status_code == 302
     assert "oauth_error=magic_link_invalid" in str(response.headers.get("location"))
+
+
+async def test_local_auth_bypass_requires_configuration(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes.settings, "env", "test")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", None)
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", None)
+
+    response = await client.post("/auth/local-bypass", json={"token": "test-token"})
+
+    assert response.status_code == 503
+
+
+async def test_local_auth_bypass_rejects_invalid_token(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes.settings, "env", "test")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", "expected-token")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", "local@example.com")
+
+    response = await client.post("/auth/local-bypass", json={"token": "wrong-token"})
+
+    assert response.status_code == 401
+
+
+async def test_local_auth_bypass_is_hidden_outside_local_env(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes.settings, "env", "production")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", "expected-token")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", "local@example.com")
+
+    response = await client.post("/auth/local-bypass", json={"token": "expected-token"})
+
+    assert response.status_code == 404
+
+
+async def test_local_auth_bypass_creates_user_and_authenticates(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes.settings, "env", "test")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", "expected-token")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", "local@example.com")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_display_name", "Local Tester")
+    monkeypatch.setattr(
+        auth_routes.settings,
+        "local_auth_bypass_avatar_url",
+        "https://example.com/local.png",
+    )
+
+    response = await client.post("/auth/local-bypass", json={"token": "expected-token"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True}
+
+    me = await client.get("/me")
+    assert me.status_code == 200, me.text
+    data = me.json()
+    assert data["email"] == "local@example.com"
+    assert data["display_name"] == "Local Tester"
+    assert data["avatar_url"] == "https://example.com/local.png"

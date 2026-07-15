@@ -37,6 +37,10 @@ RESEND_API_KEY=
 RESEND_FROM_EMAIL="Arbiter <no-reply@yourdomain.com>"
 MAGIC_LINK_VERIFY_URL=https://www.arbitertv.com/auth/magic-link/verify
 MAGIC_LINK_EXPIRE_MINUTES=15
+LOCAL_AUTH_BYPASS_TOKEN=
+LOCAL_AUTH_BYPASS_EMAIL=
+LOCAL_AUTH_BYPASS_DISPLAY_NAME="Arbiter Test User"
+LOCAL_AUTH_BYPASS_AVATAR_URL=
 ```
 
 4) Run migrations
@@ -114,6 +118,8 @@ The app uses cookie-based auth. `POST /auth/login` sets an `access_token` cookie
   - Starts OAuth redirect flow for social sign-in.
 - `GET /auth/google/callback`
   - Handles provider callback, creates/links a user, sets `access_token` cookie, redirects to frontend.
+- `POST /auth/local-bypass`
+  - Local/test-only shortcut for development when `LOCAL_AUTH_BYPASS_TOKEN` and `LOCAL_AUTH_BYPASS_EMAIL` are configured.
 - `POST /auth/logout`
   - Clears cookie.
 - `GET /me`
@@ -238,6 +244,10 @@ Common optional vars:
 - `RESEND_FROM_EMAIL`
 - `MAGIC_LINK_VERIFY_URL` (production default `https://www.arbitertv.com/auth/magic-link/verify`; local runs use `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
+- `LOCAL_AUTH_BYPASS_TOKEN`: local/test-only token for `POST /auth/local-bypass`; never set this in production
+- `LOCAL_AUTH_BYPASS_EMAIL`: local/test-only user email to create or sign in through the bypass
+- `LOCAL_AUTH_BYPASS_DISPLAY_NAME` (default `Arbiter Test User`)
+- `LOCAL_AUTH_BYPASS_AVATAR_URL` (optional)
 
 ## Deploy on Render (no Docker required)
 

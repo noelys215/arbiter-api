@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
     auth_cookie_secure: bool | None = Field(default=None, alias="AUTH_COOKIE_SECURE")
     auth_cookie_domain: str | None = Field(default=None, alias="AUTH_COOKIE_DOMAIN")
+    local_auth_bypass_token: str | None = Field(default=None, alias="LOCAL_AUTH_BYPASS_TOKEN")
+    local_auth_bypass_email: str | None = Field(default=None, alias="LOCAL_AUTH_BYPASS_EMAIL")
+    local_auth_bypass_display_name: str = Field(
+        default="Arbiter Test User",
+        alias="LOCAL_AUTH_BYPASS_DISPLAY_NAME",
+    )
+    local_auth_bypass_avatar_url: str | None = Field(
+        default=None,
+        alias="LOCAL_AUTH_BYPASS_AVATAR_URL",
+    )
 
     @field_validator("database_url", mode="before")
     @classmethod

@@ -22,6 +22,7 @@ from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    LocalAuthBypassRequest,
     MagicLinkRequest,
     MagicLinkRequestResponse,
     LogoutResponse,
@@ -323,6 +324,45 @@ async def login(payload: LoginRequest, response: Response, db: AsyncSession = De
 
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    _set_auth_cookie(response, str(user.id))
+    return LoginResponse(ok=True)
+
+
+@router.post("/local-bypass", response_model=LoginResponse)
+async def local_auth_bypass(
+    payload: LocalAuthBypassRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db_session),
+):
+    if not settings.is_local_env():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    expected_token = (settings.local_auth_bypass_token or "").strip()
+    email = _clean_email(settings.local_auth_bypass_email)
+    if not expected_token or not email:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Local auth bypass is not configured",
+        )
+
+    if not secrets.compare_digest(payload.token, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid local auth bypass token",
+        )
+
+    display_name = (
+        _clean_text(settings.local_auth_bypass_display_name)
+        or _default_display_name_from_email(email)
+    )
+    avatar_url = _clean_text(settings.local_auth_bypass_avatar_url)
+    user = await _upsert_oauth_user(
+        db,
+        email=email,
+        display_name=display_name,
+        avatar_url=avatar_url,
+    )
 
     _set_auth_cookie(response, str(user.id))
     return LoginResponse(ok=True)
