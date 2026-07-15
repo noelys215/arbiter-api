@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     resend_api_key: str | None = Field(default=None, alias="RESEND_API_KEY")
     resend_from_email: str | None = Field(default=None, alias="RESEND_FROM_EMAIL")
     magic_link_verify_url: str = Field(
-        default="http://localhost:8000/auth/magic-link/verify",
+        default="https://www.arbitertv.com/auth/magic-link/verify",
         alias="MAGIC_LINK_VERIFY_URL",
     )
     magic_link_expire_minutes: int = Field(default=15, alias="MAGIC_LINK_EXPIRE_MINUTES")
@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     oauth_google_client_id: str | None = Field(default=None, alias="OAUTH_GOOGLE_CLIENT_ID")
     oauth_google_client_secret: str | None = Field(default=None, alias="OAUTH_GOOGLE_CLIENT_SECRET")
     oauth_google_callback_url: str = Field(default="http://localhost:8000/auth/google/callback", alias="OAUTH_GOOGLE_CALLBACK_URL")
-    oauth_frontend_success_url: str = Field(default="http://localhost:5173/app", alias="OAUTH_FRONTEND_SUCCESS_URL")
-    oauth_frontend_failure_url: str = Field(default="http://localhost:5173/login", alias="OAUTH_FRONTEND_FAILURE_URL")
+    oauth_frontend_success_url: str = Field(default="https://www.arbitertv.com/app", alias="OAUTH_FRONTEND_SUCCESS_URL")
+    oauth_frontend_failure_url: str = Field(default="https://www.arbitertv.com/login", alias="OAUTH_FRONTEND_FAILURE_URL")
     oauth_session_secret: str | None = Field(default=None, alias="OAUTH_SESSION_SECRET")
     auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
     auth_cookie_secure: bool | None = Field(default=None, alias="AUTH_COOKIE_SECURE")

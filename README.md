@@ -30,12 +30,12 @@ OPENAI_MODEL=gpt-5-mini
 OAUTH_GOOGLE_CLIENT_ID=
 OAUTH_GOOGLE_CLIENT_SECRET=
 OAUTH_GOOGLE_CALLBACK_URL=http://localhost:8000/auth/google/callback
-OAUTH_FRONTEND_SUCCESS_URL=http://localhost:5173/app
-OAUTH_FRONTEND_FAILURE_URL=http://localhost:5173/login
+OAUTH_FRONTEND_SUCCESS_URL=https://www.arbitertv.com/app
+OAUTH_FRONTEND_FAILURE_URL=https://www.arbitertv.com/login
 OAUTH_SESSION_SECRET=
 RESEND_API_KEY=
 RESEND_FROM_EMAIL="Arbiter <no-reply@yourdomain.com>"
-MAGIC_LINK_VERIFY_URL=http://localhost:8000/auth/magic-link/verify
+MAGIC_LINK_VERIFY_URL=https://www.arbitertv.com/auth/magic-link/verify
 MAGIC_LINK_EXPIRE_MINUTES=15
 ```
 
@@ -231,12 +231,12 @@ Common optional vars:
 - `OAUTH_GOOGLE_CLIENT_ID`
 - `OAUTH_GOOGLE_CLIENT_SECRET`
 - `OAUTH_GOOGLE_CALLBACK_URL` (default `http://localhost:8000/auth/google/callback`)
-- `OAUTH_FRONTEND_SUCCESS_URL` (default `http://localhost:5173/app`)
-- `OAUTH_FRONTEND_FAILURE_URL` (default `http://localhost:5173/login`)
+- `OAUTH_FRONTEND_SUCCESS_URL` (production default `https://www.arbitertv.com/app`; local runs use `http://localhost:5173/app`)
+- `OAUTH_FRONTEND_FAILURE_URL` (production default `https://www.arbitertv.com/login`; local runs use `http://localhost:5173/login`)
 - `OAUTH_SESSION_SECRET` (falls back to `JWT_SECRET` if unset)
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
-- `MAGIC_LINK_VERIFY_URL` (default `http://localhost:8000/auth/magic-link/verify`)
+- `MAGIC_LINK_VERIFY_URL` (production default `https://www.arbitertv.com/auth/magic-link/verify`; local runs use `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
 
 ## Deploy on Render (no Docker required)

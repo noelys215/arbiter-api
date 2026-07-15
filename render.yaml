@@ -34,7 +34,7 @@ services:
       - key: AUTH_COOKIE_SECURE
         value: "true"
       - key: CORS_ORIGINS
-        sync: false
+        value: https://arbitertv.com,https://www.arbitertv.com
       - key: TMDB_TOKEN
         sync: false
       - key: OPENAI_API_KEY
@@ -48,9 +48,9 @@ services:
       - key: OAUTH_GOOGLE_CALLBACK_URL
         sync: false
       - key: OAUTH_FRONTEND_SUCCESS_URL
-        sync: false
+        value: https://www.arbitertv.com/app
       - key: OAUTH_FRONTEND_FAILURE_URL
-        sync: false
+        value: https://www.arbitertv.com/login
       - key: OAUTH_SESSION_SECRET
         generateValue: true
       - key: RESEND_API_KEY
@@ -58,6 +58,6 @@ services:
       - key: RESEND_FROM_EMAIL
         sync: false
       - key: MAGIC_LINK_VERIFY_URL
-        sync: false
+        value: https://www.arbitertv.com/auth/magic-link/verify
       - key: MAGIC_LINK_EXPIRE_MINUTES
         value: "15"

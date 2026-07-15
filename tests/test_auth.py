@@ -114,10 +114,11 @@ async def test_magic_link_request_sends_email_when_configured(client, monkeypatc
 
     monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
     monkeypatch.setattr(auth_routes.settings, "resend_from_email", "Arbiter <no-reply@example.com>")
+    monkeypatch.setattr(auth_routes.settings, "env", "production")
     monkeypatch.setattr(
         auth_routes.settings,
         "magic_link_verify_url",
-        "http://localhost:8000/auth/magic-link/verify",
+        "https://www.arbitertv.com/auth/magic-link/verify",
     )
     monkeypatch.setattr(auth_routes, "send_magic_link_email", _fake_send_magic_link_email)
 
@@ -129,7 +130,7 @@ async def test_magic_link_request_sends_email_when_configured(client, monkeypatc
     assert response.json() == {"ok": True}
     assert sent_payload["to_email"] == "magic@example.com"
     assert sent_payload["magic_link_url"].startswith(
-        "http://localhost:8000/auth/magic-link/verify?token="
+        "https://www.arbitertv.com/auth/magic-link/verify?token="
     )
 
 
