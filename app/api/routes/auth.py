@@ -166,6 +166,23 @@ def _extract_avatar_url(payload: dict[str, object]) -> str | None:
     return None
 
 
+def _configured_local_bypass_accounts() -> list[dict[str, str | None]]:
+    return [
+        {
+            "token": (settings.local_auth_bypass_token or "").strip(),
+            "email": _clean_email(settings.local_auth_bypass_email),
+            "display_name": _clean_text(settings.local_auth_bypass_display_name),
+            "avatar_url": _clean_text(settings.local_auth_bypass_avatar_url),
+        },
+        {
+            "token": (settings.local_auth_bypass_secondary_token or "").strip(),
+            "email": _clean_email(settings.local_auth_bypass_secondary_email),
+            "display_name": _clean_text(settings.local_auth_bypass_secondary_display_name),
+            "avatar_url": _clean_text(settings.local_auth_bypass_secondary_avatar_url),
+        },
+    ]
+
+
 def _default_display_name_from_email(email: str) -> str:
     local_part = email.split("@", 1)[0].strip()
     if not local_part:
@@ -338,25 +355,34 @@ async def local_auth_bypass(
     if not settings.is_local_env():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    expected_token = (settings.local_auth_bypass_token or "").strip()
-    email = _clean_email(settings.local_auth_bypass_email)
-    if not expected_token or not email:
+    configured_accounts = [
+        account
+        for account in _configured_local_bypass_accounts()
+        if account["token"] and account["email"]
+    ]
+    if not configured_accounts:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Local auth bypass is not configured",
         )
 
-    if not secrets.compare_digest(payload.token, expected_token):
+    matched_account = next(
+        (
+            account
+            for account in configured_accounts
+            if secrets.compare_digest(payload.token, str(account["token"]))
+        ),
+        None,
+    )
+    if matched_account is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid local auth bypass token",
         )
 
-    display_name = (
-        _clean_text(settings.local_auth_bypass_display_name)
-        or _default_display_name_from_email(email)
-    )
-    avatar_url = _clean_text(settings.local_auth_bypass_avatar_url)
+    email = str(matched_account["email"])
+    display_name = str(matched_account["display_name"] or _default_display_name_from_email(email))
+    avatar_url = matched_account["avatar_url"]
     user = await _upsert_oauth_user(
         db,
         email=email,

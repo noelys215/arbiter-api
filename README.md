@@ -41,6 +41,10 @@ LOCAL_AUTH_BYPASS_TOKEN=
 LOCAL_AUTH_BYPASS_EMAIL=
 LOCAL_AUTH_BYPASS_DISPLAY_NAME="Arbiter Test User"
 LOCAL_AUTH_BYPASS_AVATAR_URL=
+LOCAL_AUTH_BYPASS_SECONDARY_TOKEN=
+LOCAL_AUTH_BYPASS_SECONDARY_EMAIL=
+LOCAL_AUTH_BYPASS_SECONDARY_DISPLAY_NAME="Arbiter Test User 2"
+LOCAL_AUTH_BYPASS_SECONDARY_AVATAR_URL=
 ```
 
 4) Run migrations
@@ -248,6 +252,10 @@ Common optional vars:
 - `LOCAL_AUTH_BYPASS_EMAIL`: local/test-only user email to create or sign in through the bypass
 - `LOCAL_AUTH_BYPASS_DISPLAY_NAME` (default `Arbiter Test User`)
 - `LOCAL_AUTH_BYPASS_AVATAR_URL` (optional)
+- `LOCAL_AUTH_BYPASS_SECONDARY_TOKEN`: optional second local/test-only token for multi-user browser testing
+- `LOCAL_AUTH_BYPASS_SECONDARY_EMAIL`: optional second local/test-only user email
+- `LOCAL_AUTH_BYPASS_SECONDARY_DISPLAY_NAME` (default `Arbiter Test User 2`)
+- `LOCAL_AUTH_BYPASS_SECONDARY_AVATAR_URL` (optional)
 
 ## Deploy on Render (no Docker required)
 

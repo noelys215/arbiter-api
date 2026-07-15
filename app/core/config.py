@@ -56,6 +56,22 @@ class Settings(BaseSettings):
         default=None,
         alias="LOCAL_AUTH_BYPASS_AVATAR_URL",
     )
+    local_auth_bypass_secondary_token: str | None = Field(
+        default=None,
+        alias="LOCAL_AUTH_BYPASS_SECONDARY_TOKEN",
+    )
+    local_auth_bypass_secondary_email: str | None = Field(
+        default=None,
+        alias="LOCAL_AUTH_BYPASS_SECONDARY_EMAIL",
+    )
+    local_auth_bypass_secondary_display_name: str = Field(
+        default="Arbiter Test User 2",
+        alias="LOCAL_AUTH_BYPASS_SECONDARY_DISPLAY_NAME",
+    )
+    local_auth_bypass_secondary_avatar_url: str | None = Field(
+        default=None,
+        alias="LOCAL_AUTH_BYPASS_SECONDARY_AVATAR_URL",
+    )
 
     @field_validator("database_url", mode="before")
     @classmethod

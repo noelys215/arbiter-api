@@ -213,3 +213,43 @@ async def test_local_auth_bypass_creates_user_and_authenticates(client, monkeypa
     assert data["email"] == "local@example.com"
     assert data["display_name"] == "Local Tester"
     assert data["avatar_url"] == "https://example.com/local.png"
+
+
+async def test_local_auth_bypass_supports_secondary_user(client, client_factory, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    monkeypatch.setattr(auth_routes.settings, "env", "test")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", "primary-token")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", "primary@example.com")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_display_name", "Primary Tester")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_avatar_url", None)
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_secondary_token", "secondary-token")
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_secondary_email", "secondary@example.com")
+    monkeypatch.setattr(
+        auth_routes.settings,
+        "local_auth_bypass_secondary_display_name",
+        "Secondary Tester",
+    )
+    monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_secondary_avatar_url", None)
+
+    primary_response = await client.post(
+        "/auth/local-bypass",
+        json={"token": "primary-token"},
+    )
+    assert primary_response.status_code == 200, primary_response.text
+    primary_me = await client.get("/me")
+    assert primary_me.status_code == 200, primary_me.text
+    assert primary_me.json()["email"] == "primary@example.com"
+
+    async with client_factory() as secondary_client:
+        secondary_response = await secondary_client.post(
+            "/auth/local-bypass",
+            json={"token": "secondary-token"},
+        )
+        assert secondary_response.status_code == 200, secondary_response.text
+        secondary_me = await secondary_client.get("/me")
+        assert secondary_me.status_code == 200, secondary_me.text
+        secondary_data = secondary_me.json()
+        assert secondary_data["email"] == "secondary@example.com"
+        assert secondary_data["display_name"] == "Secondary Tester"
+        assert secondary_data["id"] != primary_me.json()["id"]
