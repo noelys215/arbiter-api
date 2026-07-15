@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.presenters.users import avatar_fields_from_user
 from app.models.group_membership import GroupMembership
 from app.models.tonight_session import TonightSession
 from app.models.tonight_session_candidate import TonightSessionCandidate
@@ -2471,7 +2472,7 @@ async def _round1_vote_summaries(
             {
                 "user_id": user_id,
                 "display_name": display_name,
-                "avatar_url": user.avatar_url if user else None,
+                **avatar_fields_from_user(user),
                 "vote": vote,
             }
         )

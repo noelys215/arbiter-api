@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import value_error
+from app.api.presenters.users import public_user_from_user
 from app.models.user import User
 from app.schemas.friends import (
     FriendInviteCreateResponse,
@@ -65,16 +66,7 @@ async def get_friends(
     user: User = Depends(get_current_user),
 ):
     friends = await list_friends(db, user.id)
-    return [
-        FriendListItem(
-            id=str(f.id),
-            email=f.email,
-            username=f.username,
-            display_name=f.display_name,
-            avatar_url=f.avatar_url,
-        )
-        for f in friends
-    ]
+    return [FriendListItem(**public_user_from_user(f)) for f in friends]
 
 
 @router.post("/unfriend", response_model=UnfriendResponse, status_code=200)

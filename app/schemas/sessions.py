@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 from app.schemas.tonight_constraints import TonightConstraints
 from app.schemas.watchlist import TitleOut
+from app.schemas.users import AvatarFields
 
 class CreateSessionRequest(BaseModel):
     constraints: dict = Field(default_factory=dict)  # we validate using TonightConstraints in service
@@ -43,10 +44,9 @@ class WatchPartyUpdateRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
 
 
-class SessionVoteParticipant(BaseModel):
+class SessionVoteParticipant(AvatarFields):
     user_id: UUID
     display_name: str
-    avatar_url: str | None = None
     vote: str
 
 

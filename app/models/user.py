@@ -20,6 +20,9 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
 
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avatar_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    avatar_style: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    avatar_seed: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 

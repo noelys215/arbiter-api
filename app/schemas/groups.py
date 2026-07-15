@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from uuid import UUID
 from typing import List
+from app.schemas.users import AvatarFields
 
 
 class CreateGroupRequest(BaseModel):
@@ -19,12 +20,11 @@ class GroupListItem(BaseModel):
     member_count: int
 
 
-class GroupMember(BaseModel):
+class GroupMember(AvatarFields):
     id: UUID
     email: str
     username: str
     display_name: str
-    avatar_url: str | None
 
 
 class GroupDetailResponse(BaseModel):

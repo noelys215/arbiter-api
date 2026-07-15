@@ -5,6 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+from app.schemas.users import AvatarFields
 
 
 class TitleOut(BaseModel):
@@ -47,12 +48,11 @@ class AddWatchlistManual(BaseModel):
 AddWatchlistRequest = AddWatchlistTMDB | AddWatchlistManual
 
 
-class WatchlistAddedBy(BaseModel):
+class WatchlistAddedBy(AvatarFields):
     id: UUID
     email: str
     username: str
     display_name: str
-    avatar_url: str | None = None
 
 
 class WatchlistItemOut(BaseModel):

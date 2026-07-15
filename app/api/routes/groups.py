@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import permission_error, value_error
+from app.api.presenters.users import public_user_from_user
 from app.models.user import User
 from app.schemas.groups import (
     CreateGroupRequest,
@@ -74,16 +75,7 @@ async def group_detail_route(
             name=data["name"],
             owner_id=data["owner_id"],
             created_at=data["created_at"],
-            members=[
-                {
-                    "id": m.id,
-                    "email": m.email,
-                    "username": m.username,
-                    "display_name": m.display_name,
-                    "avatar_url": m.avatar_url,
-                }
-                for m in data["members"]
-            ],
+            members=[public_user_from_user(m) for m in data["members"]],
         )
     except PermissionError as e:
         raise permission_error(e) from e

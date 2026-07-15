@@ -10,6 +10,7 @@ from uuid import UUID
 from app.api.deps import COOKIE_NAME, get_current_user, get_db, get_user_from_access_token
 from app.api.http_errors import permission_error, value_error
 from app.api.presenters.titles import build_title_out_with_taxonomy
+from app.api.presenters.users import public_user_from_user
 from app.models.user import User
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.watchlist import (
@@ -39,17 +40,7 @@ async def to_out(item, already_exists: bool = False) -> WatchlistItemOut:
     return WatchlistItemOut(
         id=item.id,
         group_id=item.group_id,
-        added_by_user=(
-            {
-                "id": u.id,
-                "email": u.email,
-                "username": u.username,
-                "display_name": u.display_name,
-                "avatar_url": u.avatar_url,
-            }
-            if u
-            else None
-        ),
+        added_by_user=public_user_from_user(u) if u else None,
         status=item.status,
         snoozed_until=item.snoozed_until,
         created_at=item.created_at,

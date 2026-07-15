@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.users import AvatarFields, AvatarSource
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -53,9 +54,14 @@ class LogoutResponse(BaseModel):
     ok: bool
 
 
-class MeResponse(BaseModel):
+class AvatarUpdateRequest(BaseModel):
+    avatar_source: AvatarSource
+    avatar_style: str | None = Field(default=None, max_length=32)
+    avatar_seed: str | None = Field(default=None, max_length=128)
+
+
+class MeResponse(AvatarFields):
     id: str
     email: EmailStr
     username: str
     display_name: str
-    avatar_url: str | None = None
