@@ -199,6 +199,25 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
         st = (await async_client.get(f"/sessions/{session_id}")).json()
         assert st["status"] == "complete"
         assert st["result_watchlist_item_id"] in (i1["id"], i2["id"])
+        summaries = {
+            row["watchlist_item_id"]: row
+            for row in st["vote_summaries"]
+        }
+        assert summaries[i1["id"]]["yes_count"] == 1
+        assert summaries[i1["id"]]["no_count"] == 0
+        assert summaries[i1["id"]]["total_count"] == 1
+        assert summaries[i1["id"]]["is_leading"] is True
+        assert summaries[i1["id"]]["voters"] == [
+            {
+                "user_id": user_a["id"],
+                "display_name": "A",
+                "avatar_url": None,
+                "vote": "yes",
+            }
+        ]
+        assert summaries[i2["id"]]["yes_count"] == 1
+        assert summaries[i2["id"]]["no_count"] == 1
+        assert summaries[i2["id"]]["total_count"] == 2
 
         # Expect i1: yes=1 no=0 ; i2: yes=1 no=1 -> tie on yes, min no wins => i1
         assert st["result_watchlist_item_id"] == i1["id"]

@@ -43,6 +43,22 @@ class WatchPartyUpdateRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
 
 
+class SessionVoteParticipant(BaseModel):
+    user_id: UUID
+    display_name: str
+    avatar_url: str | None = None
+    vote: str
+
+
+class SessionVoteSummary(BaseModel):
+    watchlist_item_id: UUID
+    yes_count: int = 0
+    no_count: int = 0
+    total_count: int = 0
+    is_leading: bool = False
+    voters: list[SessionVoteParticipant] = Field(default_factory=list)
+
+
 class SessionStateResponse(BaseModel):
     session_id: UUID
     status: str
@@ -61,4 +77,5 @@ class SessionStateResponse(BaseModel):
     watch_party_set_by_user_id: UUID | None = None
     mutual_candidate_ids: list[UUID] = Field(default_factory=list)
     shortlist: list[UUID] = Field(default_factory=list)
+    vote_summaries: list[SessionVoteSummary] = Field(default_factory=list)
     candidates: list[SessionCandidateOut]

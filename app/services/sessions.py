@@ -20,6 +20,7 @@ from app.models.group_membership import GroupMembership
 from app.models.tonight_session import TonightSession
 from app.models.tonight_session_candidate import TonightSessionCandidate
 from app.models.tonight_vote import TonightVote
+from app.models.user import User
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.tonight_constraints import TonightConstraints
 from app.services.ai import AIError, ai_parse_constraints, ai_rerank_candidates
@@ -1554,6 +1555,7 @@ class SessionStateView:
     user_seconds_left: int
     mutual_candidate_ids: list[uuid.UUID]
     shortlist: list[uuid.UUID]
+    vote_summaries: list[dict[str, Any]]
     tie_break_required: bool
     tie_break_candidate_ids: list[uuid.UUID]
     ended_by_leader: bool
@@ -2408,6 +2410,84 @@ def _round1_shortlist(runtime: dict[str, Any]) -> list[uuid.UUID]:
     return _parse_uuid_list(ordered)
 
 
+async def _round1_vote_summaries(
+    db: AsyncSession,
+    runtime: dict[str, Any],
+    *,
+    candidate_ids: list[uuid.UUID],
+) -> list[dict[str, Any]]:
+    round1 = _runtime_round_state(runtime, 1)
+    votes = round1["votes"]
+    stats: dict[uuid.UUID, dict[str, Any]] = {
+        item_id: {
+            "watchlist_item_id": item_id,
+            "yes_count": 0,
+            "no_count": 0,
+            "total_count": 0,
+            "is_leading": False,
+            "voters": [],
+        }
+        for item_id in candidate_ids
+    }
+
+    user_ids: set[uuid.UUID] = set()
+    parsed_votes: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+    for user_id_raw, user_votes in votes.items():
+        if not isinstance(user_votes, dict):
+            continue
+        try:
+            user_id = uuid.UUID(str(user_id_raw))
+        except (TypeError, ValueError):
+            continue
+        for item_id_raw, vote in user_votes.items():
+            if vote not in {"yes", "no"}:
+                continue
+            try:
+                item_id = uuid.UUID(str(item_id_raw))
+            except (TypeError, ValueError):
+                continue
+            if item_id not in stats:
+                continue
+            user_ids.add(user_id)
+            parsed_votes.append((user_id, item_id, vote))
+
+    users_by_id: dict[uuid.UUID, User] = {}
+    if user_ids:
+        rows = (
+            await db.execute(select(User).where(User.id.in_(list(user_ids))))
+        ).scalars().all()
+        users_by_id = {user.id: user for user in rows}
+
+    for user_id, item_id, vote in parsed_votes:
+        summary = stats[item_id]
+        if vote == "yes":
+            summary["yes_count"] += 1
+        else:
+            summary["no_count"] += 1
+        summary["total_count"] += 1
+        user = users_by_id.get(user_id)
+        display_name = (user.display_name or user.username) if user else "Someone"
+        summary["voters"].append(
+            {
+                "user_id": user_id,
+                "display_name": display_name,
+                "avatar_url": user.avatar_url if user else None,
+                "vote": vote,
+            }
+        )
+
+    voted = [summary for summary in stats.values() if summary["total_count"] > 0]
+    if voted:
+        max_yes = max(summary["yes_count"] for summary in voted)
+        yes_leaders = [summary for summary in voted if summary["yes_count"] == max_yes]
+        min_no = min(summary["no_count"] for summary in yes_leaders)
+        leaders = [summary for summary in yes_leaders if summary["no_count"] == min_no]
+        if len(leaders) == 1:
+            leaders[0]["is_leading"] = True
+
+    return [stats[item_id] for item_id in candidate_ids]
+
+
 def _shared_requested_moods(runtime: dict[str, Any]) -> list[str]:
     collecting = runtime.get("collecting")
     if not isinstance(collecting, dict):
@@ -2783,6 +2863,11 @@ async def _build_session_state_view(
         display_candidates = _session_candidates_for_ids(s, candidate_ids=display_ids)
         _persist_runtime(s, runtime)
         await db.flush()
+        vote_summaries = await _round1_vote_summaries(
+            db,
+            runtime,
+            candidate_ids=display_ids,
+        )
         return SessionStateView(
             session=s,
             candidates=display_candidates,
@@ -2792,6 +2877,7 @@ async def _build_session_state_view(
             user_seconds_left=0,
             mutual_candidate_ids=[],
             shortlist=shortlist,
+            vote_summaries=vote_summaries,
             tie_break_required=False,
             tie_break_candidate_ids=[],
             ended_by_leader=bool(runtime.get("ended_by_leader")),
@@ -2833,6 +2919,7 @@ async def _build_session_state_view(
                 user_seconds_left=user_seconds_left,
                 mutual_candidate_ids=[],
                 shortlist=[],
+                vote_summaries=[],
                 tie_break_required=False,
                 tie_break_candidate_ids=[],
                 ended_by_leader=False,
@@ -2846,6 +2933,11 @@ async def _build_session_state_view(
         shortlist = _round1_shortlist(runtime)
         _persist_runtime(s, runtime)
         await db.flush()
+        vote_summaries = await _round1_vote_summaries(
+            db,
+            runtime,
+            candidate_ids=tie_break_ids,
+        )
         return SessionStateView(
             session=s,
             candidates=display_candidates,
@@ -2855,6 +2947,7 @@ async def _build_session_state_view(
             user_seconds_left=0,
             mutual_candidate_ids=[],
             shortlist=shortlist,
+            vote_summaries=vote_summaries,
             tie_break_required=True,
             tie_break_candidate_ids=tie_break_ids,
             ended_by_leader=False,
@@ -2894,6 +2987,12 @@ async def _build_session_state_view(
             s,
             candidate_ids=_candidate_ids_for_round(s, runtime, 1),
         )
+        complete_display_ids = [card.watchlist_item_id for card in display_candidates]
+        vote_summaries = await _round1_vote_summaries(
+            db,
+            runtime,
+            candidate_ids=complete_display_ids,
+        )
         return SessionStateView(
             session=s,
             candidates=display_candidates,
@@ -2903,6 +3002,7 @@ async def _build_session_state_view(
             user_seconds_left=0,
             mutual_candidate_ids=[],
             shortlist=shortlist,
+            vote_summaries=vote_summaries,
             tie_break_required=False,
             tie_break_candidate_ids=[],
             ended_by_leader=bool(runtime.get("ended_by_leader")),
@@ -2915,6 +3015,11 @@ async def _build_session_state_view(
 
     _persist_runtime(s, runtime)
     await db.flush()
+    vote_summaries = await _round1_vote_summaries(
+        db,
+        runtime,
+        candidate_ids=current_ids,
+    )
     return SessionStateView(
         session=s,
         candidates=display_candidates,
@@ -2924,6 +3029,7 @@ async def _build_session_state_view(
         user_seconds_left=user_seconds_left,
         mutual_candidate_ids=[],
         shortlist=shortlist,
+        vote_summaries=vote_summaries,
         tie_break_required=False,
         tie_break_candidate_ids=[],
         ended_by_leader=False,

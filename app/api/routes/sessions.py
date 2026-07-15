@@ -74,6 +74,7 @@ async def _session_state_response_from_view(view) -> SessionStateResponse:
         watch_party_set_by_user_id=s.watch_party_set_by_user_id,
         mutual_candidate_ids=view.mutual_candidate_ids,
         shortlist=view.shortlist,
+        vote_summaries=view.vote_summaries,
         candidates=await asyncio.gather(
             *[
                 _candidate_out(
