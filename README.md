@@ -261,6 +261,12 @@ Common optional vars:
 
 Use the included `render.yaml` blueprint in the repo root.
 
+Production deployments must rate-limit invitation creation at the platform or
+edge layer. Apply limits to authenticated friend- and group-invite creation
+routes without logging request bodies or raw invite tokens. The application
+enforces authorization, expiry, revocation, and use limits, but does not ship an
+in-process rate limiter.
+
 1) Push this backend repo and create a new Render Blueprint service from `render.yaml`.
 2) Render will provision:
 - Web service: `watchpicker-api`
