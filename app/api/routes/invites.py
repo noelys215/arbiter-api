@@ -72,6 +72,9 @@ async def friend_invite_accept(
                 "used_invite": 409,
                 "cannot_friend_self": 400,
             },
+            detail_overrides={
+                "cannot_friend_self": "You cannot accept your own invitation.",
+            },
             default_detail="Could not accept invitation",
         ) from exc
 

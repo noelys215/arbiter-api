@@ -63,6 +63,20 @@ async def test_friend_preview_is_public_and_excludes_email(
     assert "email" not in preview.json()["inviter"]
 
 
+async def test_friend_invite_creator_cannot_accept_own_invite(
+    client, user_factory, login_helper
+):
+    user = await user_factory(client)
+    await login_helper(client, email=user["email"], password=user["password"])
+    token = (await client.post("/friends/invites")).json()["token"]
+
+    response = await client.post(f"/invites/friend/{token}/accept")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "You cannot accept your own invitation."}
+    assert (await client.get("/friends")).json() == []
+
+
 async def test_raw_friend_token_is_not_persisted(
     client, user_factory, login_helper, db_session
 ):
