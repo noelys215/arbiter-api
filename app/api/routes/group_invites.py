@@ -18,6 +18,11 @@ from app.services.groups import (
     decide_group_invitation,
     list_group_invitations,
     revoke_group_invitation,
+    list_group_member_ids,
+)
+from app.services.social_realtime import (
+    publish_group_invite_update,
+    publish_group_update,
 )
 
 router = APIRouter(prefix="/group-invites", tags=["group invitations"])
@@ -66,17 +71,45 @@ async def decide_group_invite(
     user: User = Depends(get_current_user),
 ):
     try:
-        already_member = await decide_group_invitation(
+        result = await decide_group_invitation(
             db,
             current_user_id=user.id,
             invite_id=invite_id,
             decision=payload.decision,
         )
+        member_ids = (
+            await list_group_member_ids(db, result.group_id)
+            if payload.decision == "accept" and result.changed
+            else []
+        )
         await db.commit()
+        if result.changed:
+            invite_recipients = {
+                user.id,
+                result.created_by_user_id,
+            }
+            if result.target_user_id is not None:
+                invite_recipients.add(result.target_user_id)
+            await publish_group_invite_update(
+                invite_recipients,
+                reason=(
+                    "invite_accepted"
+                    if payload.decision == "accept"
+                    else "invite_declined"
+                ),
+                group_id=result.group_id,
+            )
+            if payload.decision == "accept":
+                await publish_group_update(
+                    member_ids,
+                    reason="membership_created",
+                    group_id=result.group_id,
+                    member_user_id=user.id,
+                )
         return GroupInviteDecisionResponse(
             ok=True,
             decision="accepted" if payload.decision == "accept" else "declined",
-            already_member=already_member,
+            already_member=result.already_member,
         )
     except PermissionError as exc:
         await db.rollback()
@@ -102,12 +135,21 @@ async def revoke_group_invite(
     user: User = Depends(get_current_user),
 ):
     try:
-        await revoke_group_invitation(
+        invite, changed = await revoke_group_invitation(
             db,
             current_user_id=user.id,
             invite_id=invite_id,
         )
         await db.commit()
+        if changed:
+            recipients = {user.id, invite.created_by_user_id}
+            if invite.target_user_id is not None:
+                recipients.add(invite.target_user_id)
+            await publish_group_invite_update(
+                recipients,
+                reason="invite_revoked",
+                group_id=invite.group_id,
+            )
     except PermissionError as exc:
         await db.rollback()
         raise permission_error(exc) from exc

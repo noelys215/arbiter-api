@@ -136,7 +136,9 @@ async def _accept_friend_invite_record(
     return False
 
 
-async def accept_friend_invite(db: AsyncSession, current_user_id: UUID, code: str) -> bool:
+async def accept_friend_invite(
+    db: AsyncSession, current_user_id: UUID, code: str
+) -> tuple[bool, UUID]:
     # Lock the invite row so uses_count is atomic
     invite = (
         await db.execute(
@@ -149,7 +151,8 @@ async def accept_friend_invite(db: AsyncSession, current_user_id: UUID, code: st
     if not invite:
         raise ValueError("invalid_code")
     try:
-        return await _accept_friend_invite_record(db, current_user_id, invite)
+        already_friends = await _accept_friend_invite_record(db, current_user_id, invite)
+        return already_friends, invite.created_by_user_id
     except ValueError as exc:
         code_map = {
             "expired_invite": "expired_code",
@@ -163,9 +166,10 @@ async def accept_friend_link_invite(
     db: AsyncSession,
     current_user_id: UUID,
     token: str,
-) -> bool:
+) -> tuple[bool, UUID]:
     invite = await get_friend_invite_by_token(db, token, lock=True)
-    return await _accept_friend_invite_record(db, current_user_id, invite)
+    already_friends = await _accept_friend_invite_record(db, current_user_id, invite)
+    return already_friends, invite.created_by_user_id
 
 
 async def revoke_friend_invite(

@@ -31,6 +31,13 @@ from app.services.groups import (
     leave_group,
     delete_group,
     add_group_members,
+    list_group_member_ids,
+)
+from app.services.social_realtime import (
+    close_deleted_group_sockets,
+    publish_group_invite_update,
+    publish_group_update,
+    revoke_group_socket_access,
 )
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -44,6 +51,12 @@ async def create_group_route(
 ):
     try:
         g = await create_group(db, user.id, payload.name, payload.member_user_ids)
+        member_ids = await list_group_member_ids(db, g.id)
+        await publish_group_update(
+            member_ids,
+            reason="membership_created",
+            group_id=g.id,
+        )
         # return list-shape
         return GroupListItem(
             id=g.id,
@@ -124,6 +137,12 @@ async def create_group_link_invite_route(
             max_uses=payload.max_uses,
         )
         await db.commit()
+        if invite.target_user_id is not None:
+            await publish_group_invite_update(
+                [user.id, invite.target_user_id],
+                reason="targeted_invite_created",
+                group_id=group_id,
+            )
         return GroupLinkInviteResponse(
             id=invite.id,
             token=token,
@@ -158,8 +177,25 @@ async def accept_group_invite_route(
     user: User = Depends(get_current_user),
 ):
     try:
-        await accept_group_invite(db, user.id, payload.code)
+        result = await accept_group_invite(db, user.id, payload.code)
+        member_ids = (
+            await list_group_member_ids(db, result.group_id)
+            if result.changed
+            else []
+        )
         await db.commit()
+        if result.changed:
+            await publish_group_invite_update(
+                [user.id, result.created_by_user_id],
+                reason="invite_accepted",
+                group_id=result.group_id,
+            )
+            await publish_group_update(
+                member_ids,
+                reason="membership_created",
+                group_id=result.group_id,
+                member_user_id=user.id,
+            )
         return {"ok": True}
     except ValueError as e:
         await db.rollback()
@@ -181,8 +217,16 @@ async def leave_group_route(
     user: User = Depends(get_current_user),
 ):
     try:
+        recipient_ids = await list_group_member_ids(db, group_id)
         await leave_group(db, group_id, user.id)
         await db.commit()
+        await publish_group_update(
+            recipient_ids,
+            reason="membership_removed",
+            group_id=group_id,
+            member_user_id=user.id,
+        )
+        await revoke_group_socket_access(group_id, user.id)
         return LeaveGroupResponse(ok=True)
     except PermissionError as e:
         await db.rollback()
@@ -205,8 +249,15 @@ async def delete_group_route(
     user: User = Depends(get_current_user),
 ):
     try:
+        recipient_ids = await list_group_member_ids(db, group_id)
         await delete_group(db, group_id, user.id)
         await db.commit()
+        await publish_group_update(
+            recipient_ids,
+            reason="group_deleted",
+            group_id=group_id,
+        )
+        await close_deleted_group_sockets(group_id)
         return DeleteGroupResponse(ok=True)
     except PermissionError as e:
         await db.rollback()
@@ -234,7 +285,15 @@ async def add_group_members_route(
             owner_id=user.id,
             member_user_ids=payload.member_user_ids,
         )
+        member_ids = await list_group_member_ids(db, group_id)
         await db.commit()
+        for added_user_id in added:
+            await publish_group_update(
+                member_ids,
+                reason="membership_created",
+                group_id=group_id,
+                member_user_id=added_user_id,
+            )
         return AddGroupMembersResponse(ok=True, added_user_ids=added, skipped_user_ids=skipped)
     except PermissionError as e:
         await db.rollback()

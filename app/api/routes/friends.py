@@ -24,6 +24,7 @@ from app.services.friends import (
     revoke_friend_invite,
     unfriend,
 )
+from app.services.social_realtime import publish_friendship_update
 from uuid import UUID
 
 router = APIRouter(prefix="/friends", tags=["friends"])
@@ -80,8 +81,15 @@ async def accept_invite(
     user: User = Depends(get_current_user),
 ):
     try:
-        await accept_friend_invite(db, user.id, payload.code)
+        already_friends, inviter_id = await accept_friend_invite(
+            db, user.id, payload.code
+        )
         await db.commit()
+        if not already_friends:
+            await publish_friendship_update(
+                [user.id, inviter_id],
+                reason="friendship_created",
+            )
         return FriendAcceptResponse(ok=True)
     except ValueError as e:
         await db.rollback()
@@ -122,6 +130,10 @@ async def unfriend_route(
     try:
         await unfriend(db, user.id, payload.user_id)
         await db.commit()
+        await publish_friendship_update(
+            [user.id, payload.user_id],
+            reason="friendship_removed",
+        )
         return UnfriendResponse(ok=True, removed=True)
     except ValueError as e:
         await db.rollback()

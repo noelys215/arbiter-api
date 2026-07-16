@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -19,6 +20,15 @@ from app.services.invitations import (
     new_invite_token,
     terminate_invite,
 )
+
+
+@dataclass(frozen=True)
+class GroupInviteMutationResult:
+    already_member: bool
+    changed: bool
+    group_id: UUID
+    created_by_user_id: UUID
+    target_user_id: UUID | None
 
 
 def _now_utc() -> datetime:
@@ -276,7 +286,7 @@ async def _accept_group_invite_record(
     db: AsyncSession,
     user_id: UUID,
     invite: GroupInvite,
-) -> bool:
+) -> GroupInviteMutationResult:
     ensure_invite_active(invite)
     if invite.target_user_id is not None and invite.target_user_id != user_id:
         raise PermissionError("This invitation belongs to another user")
@@ -290,17 +300,31 @@ async def _accept_group_invite_record(
         )
     ).scalar_one_or_none()
     if membership is not None:
-        return True
+        return GroupInviteMutationResult(
+            already_member=True,
+            changed=False,
+            group_id=invite.group_id,
+            created_by_user_id=invite.created_by_user_id,
+            target_user_id=invite.target_user_id,
+        )
     if invite.uses_count >= invite.max_uses:
         raise ValueError("used_invite")
 
     db.add(GroupMembership(group_id=invite.group_id, user_id=user_id))
     invite.uses_count += 1
     await db.flush()
-    return False
+    return GroupInviteMutationResult(
+        already_member=False,
+        changed=True,
+        group_id=invite.group_id,
+        created_by_user_id=invite.created_by_user_id,
+        target_user_id=invite.target_user_id,
+    )
 
 
-async def accept_group_invite(db: AsyncSession, user_id: UUID, code: str) -> bool:
+async def accept_group_invite(
+    db: AsyncSession, user_id: UUID, code: str
+) -> GroupInviteMutationResult:
     code = code.strip()
     invite = (
         await db.execute(
@@ -316,7 +340,7 @@ async def accept_group_link_invite(
     db: AsyncSession,
     user_id: UUID,
     token: str,
-) -> bool:
+) -> GroupInviteMutationResult:
     invite = await get_group_invite_by_token(db, token, lock=True)
     return await _accept_group_invite_record(db, user_id, invite)
 
@@ -360,7 +384,7 @@ async def decide_group_invitation(
     current_user_id: UUID,
     invite_id: UUID,
     decision: str,
-) -> bool:
+) -> GroupInviteMutationResult:
     invite = (
         await db.execute(
             sa.select(GroupInvite).where(GroupInvite.id == invite_id).with_for_update()
@@ -370,11 +394,23 @@ async def decide_group_invitation(
         raise ValueError("invalid_invite")
     if decision == "decline":
         if invite.revoked_at is not None:
-            return False
+            return GroupInviteMutationResult(
+                already_member=False,
+                changed=False,
+                group_id=invite.group_id,
+                created_by_user_id=invite.created_by_user_id,
+                target_user_id=invite.target_user_id,
+            )
         ensure_invite_active(invite)
         terminate_invite(invite)
         await db.flush()
-        return False
+        return GroupInviteMutationResult(
+            already_member=False,
+            changed=True,
+            group_id=invite.group_id,
+            created_by_user_id=invite.created_by_user_id,
+            target_user_id=invite.target_user_id,
+        )
     return await _accept_group_invite_record(db, current_user_id, invite)
 
 
@@ -383,7 +419,7 @@ async def revoke_group_invitation(
     *,
     current_user_id: UUID,
     invite_id: UUID,
-) -> None:
+) -> tuple[GroupInvite, bool]:
     invite = (
         await db.execute(
             sa.select(GroupInvite).where(GroupInvite.id == invite_id).with_for_update()
@@ -398,8 +434,22 @@ async def revoke_group_invitation(
         raise ValueError("invalid_invite")
     if invite.created_by_user_id != current_user_id and group.owner_id != current_user_id:
         raise PermissionError("Only the invite creator or group owner can revoke it")
-    terminate_invite(invite)
+    changed = invite.revoked_at is None
+    if changed:
+        terminate_invite(invite)
     await db.flush()
+    return invite, changed
+
+
+async def list_group_member_ids(
+    db: AsyncSession, group_id: UUID
+) -> list[UUID]:
+    rows = await db.execute(
+        sa.select(GroupMembership.user_id).where(
+            GroupMembership.group_id == group_id
+        )
+    )
+    return list(rows.scalars().all())
 
 
 async def leave_group(db: AsyncSession, group_id: UUID, user_id: UUID) -> None:

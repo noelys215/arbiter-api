@@ -11,6 +11,12 @@ from app.schemas.friends import FriendInviteAcceptResponse, FriendInvitePreview
 from app.schemas.groups import GroupInviteDecisionResponse, GroupInvitePreview
 from app.services.friends import accept_friend_link_invite, preview_friend_invite
 from app.services.groups import accept_group_link_invite, preview_group_invite
+from app.services.groups import list_group_member_ids
+from app.services.social_realtime import (
+    publish_friendship_update,
+    publish_group_invite_update,
+    publish_group_update,
+)
 
 router = APIRouter(prefix="/invites", tags=["invitations"])
 
@@ -45,8 +51,15 @@ async def friend_invite_accept(
     user: User = Depends(get_current_user),
 ):
     try:
-        already_friends = await accept_friend_link_invite(db, user.id, token)
+        already_friends, inviter_id = await accept_friend_link_invite(
+            db, user.id, token
+        )
         await db.commit()
+        if not already_friends:
+            await publish_friendship_update(
+                [user.id, inviter_id],
+                reason="friendship_created",
+            )
         return FriendInviteAcceptResponse(ok=True, already_friends=already_friends)
     except ValueError as exc:
         await db.rollback()
@@ -97,12 +110,29 @@ async def group_invite_accept(
     user: User = Depends(get_current_user),
 ):
     try:
-        already_member = await accept_group_link_invite(db, user.id, token)
+        result = await accept_group_link_invite(db, user.id, token)
+        member_ids = (
+            await list_group_member_ids(db, result.group_id)
+            if result.changed
+            else []
+        )
         await db.commit()
+        if result.changed:
+            await publish_group_invite_update(
+                [user.id, result.created_by_user_id],
+                reason="invite_accepted",
+                group_id=result.group_id,
+            )
+            await publish_group_update(
+                member_ids,
+                reason="membership_created",
+                group_id=result.group_id,
+                member_user_id=user.id,
+            )
         return GroupInviteDecisionResponse(
             ok=True,
             decision="accepted",
-            already_member=already_member,
+            already_member=result.already_member,
         )
     except PermissionError as exc:
         await db.rollback()

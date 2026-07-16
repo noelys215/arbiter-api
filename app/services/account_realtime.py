@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import Literal, TypedDict
 from uuid import UUID
 
 from fastapi import WebSocket
+
+
+logger = logging.getLogger(__name__)
 
 
 class AccountRealtimeEvent(TypedDict, total=False):
@@ -96,3 +100,13 @@ class AccountRealtimeHub:
 
 
 account_realtime_hub = AccountRealtimeHub()
+
+
+async def notify_account_users(
+    user_ids: Iterable[UUID],
+    event: AccountRealtimeEvent,
+) -> None:
+    try:
+        await account_realtime_hub.broadcast_to_users(user_ids, event)
+    except Exception:
+        logger.exception("Account realtime broadcast failed for %s", event["type"])
