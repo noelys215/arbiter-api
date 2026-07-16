@@ -234,3 +234,50 @@ async def test_accept_group_invite_invalid_code_returns_400(client):
     act_as_token(client, token_c)
     r = await client.post("/groups/accept-invite", json={"code": "NOT_A_REAL_CODE"})
     assert r.status_code in (400, 404), r.text
+
+
+async def test_only_owner_can_rename_group(
+    client,
+    client_factory,
+    user_factory,
+    login_helper,
+):
+    owner = await user_factory(client, display_name="Owner")
+    await login_helper(client, email=owner["email"], password=owner["password"])
+    group = (await client.post("/groups", json={"name": "Original Club"})).json()
+
+    renamed = await client.patch(
+        f"/groups/{group['id']}",
+        json={"name": "  Friday Features  "},
+    )
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Friday Features"
+    assert (await client.get(f"/groups/{group['id']}")).json()["name"] == "Friday Features"
+
+    async with client_factory() as other_client:
+        other = await user_factory(other_client, display_name="Member")
+        await login_helper(
+            other_client,
+            email=other["email"],
+            password=other["password"],
+        )
+        forbidden = await other_client.patch(
+            f"/groups/{group['id']}",
+            json={"name": "Not Allowed"},
+        )
+
+    assert forbidden.status_code == 403
+
+
+async def test_group_rename_rejects_blank_name(client, user_factory, login_helper):
+    owner = await user_factory(client, display_name="Owner")
+    await login_helper(client, email=owner["email"], password=owner["password"])
+    group = (await client.post("/groups", json={"name": "Original Club"})).json()
+
+    response = await client.patch(
+        f"/groups/{group['id']}",
+        json={"name": "   "},
+    )
+
+    assert response.status_code == 422

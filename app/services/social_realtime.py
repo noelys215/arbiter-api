@@ -8,6 +8,7 @@ from app.services.account_realtime import (
     group_invite_updated_event,
     group_updated_event,
     notify_account_users,
+    profile_updated_event,
 )
 from app.services.session_realtime import session_realtime_hub
 from app.services.watchlist_realtime import watchlist_realtime_hub
@@ -17,6 +18,12 @@ async def publish_friendship_update(
     user_ids: Iterable[UUID], *, reason: str
 ) -> None:
     await notify_account_users(user_ids, friendship_updated_event(reason=reason))
+
+
+async def publish_profile_update(
+    user_ids: Iterable[UUID], *, user_id: UUID
+) -> None:
+    await notify_account_users(user_ids, profile_updated_event(user_id=user_id))
 
 
 async def publish_group_invite_update(

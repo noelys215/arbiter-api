@@ -22,6 +22,29 @@ async def test_me_requires_auth(client):
     assert r.status_code in (401, 403)
 
 
+async def test_user_can_update_display_name(client, user_factory, login_helper):
+    user = await user_factory(client, display_name="Original Name")
+    await login_helper(client, email=user["email"], password=user["password"])
+
+    response = await client.patch(
+        "/me",
+        json={"display_name": "  Movie Night Host  "},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["display_name"] == "Movie Night Host"
+    assert (await client.get("/me")).json()["display_name"] == "Movie Night Host"
+
+
+async def test_display_name_rejects_blank_value(client, user_factory, login_helper):
+    user = await user_factory(client)
+    await login_helper(client, email=user["email"], password=user["password"])
+
+    response = await client.patch("/me", json={"display_name": "   "})
+
+    assert response.status_code == 422
+
+
 async def test_social_oauth_endpoints_require_provider_config(client):
     google = await client.get("/auth/google/login")
     facebook = await client.get("/auth/facebook/login")

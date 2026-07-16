@@ -116,3 +116,48 @@ async def test_targeted_group_invite_and_acceptance_emit_compact_updates(
         UUID(user_b["id"]),
     )
     assert group_events[-1][0] == {UUID(user_a["id"]), UUID(user_b["id"])}
+
+
+async def test_profile_and_group_rename_emit_compact_updates(
+    client,
+    user_factory,
+    login_helper,
+    monkeypatch,
+):
+    from app.api.routes import groups as group_routes
+    from app.api.routes import me as me_routes
+
+    user = await user_factory(client, display_name="Before")
+    await login_helper(client, email=user["email"], password=user["password"])
+    profile_events: list[tuple[set[UUID], UUID]] = []
+    group_events: list[tuple[set[UUID], str, UUID]] = []
+
+    async def record_profile(user_ids, *, user_id: UUID):
+        profile_events.append((set(user_ids), user_id))
+
+    async def record_group(
+        user_ids,
+        *,
+        reason: str,
+        group_id: UUID,
+        member_user_id: UUID | None = None,
+    ):
+        _ = member_user_id
+        group_events.append((set(user_ids), reason, group_id))
+
+    monkeypatch.setattr(me_routes, "publish_profile_update", record_profile)
+    profile_response = await client.patch(
+        "/me",
+        json={"display_name": "After"},
+    )
+    assert profile_response.status_code == 200
+    assert profile_events == [({UUID(user["id"])}, UUID(user["id"]))]
+
+    group_id = UUID((await client.post("/groups", json={"name": "Before"})).json()["id"])
+    monkeypatch.setattr(group_routes, "publish_group_update", record_group)
+    group_response = await client.patch(
+        f"/groups/{group_id}",
+        json={"name": "After"},
+    )
+    assert group_response.status_code == 200
+    assert group_events == [({UUID(user["id"])}, "group_renamed", group_id)]

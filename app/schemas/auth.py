@@ -61,6 +61,18 @@ class AvatarUpdateRequest(BaseModel):
     avatar_seed: str | None = Field(default=None, max_length=128)
 
 
+class ProfileUpdateRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Display name is required")
+        return cleaned
+
+
 class MeResponse(AvatarFields):
     id: str
     email: EmailStr

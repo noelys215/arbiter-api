@@ -18,14 +18,24 @@ class AccountRealtimeEvent(TypedDict, total=False):
         "friendship_updated",
         "group_invite_updated",
         "group_updated",
+        "profile_updated",
     ]
     reason: str
     group_id: str
     member_user_id: str
+    user_id: str
 
 
 def friendship_updated_event(*, reason: str) -> AccountRealtimeEvent:
     return {"type": "friendship_updated", "reason": reason}
+
+
+def profile_updated_event(*, user_id: UUID) -> AccountRealtimeEvent:
+    return {
+        "type": "profile_updated",
+        "reason": "display_name_updated",
+        "user_id": str(user_id),
+    }
 
 
 def group_invite_updated_event(

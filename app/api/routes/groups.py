@@ -10,6 +10,7 @@ from app.api.presenters.users import public_user_from_user
 from app.models.user import User
 from app.schemas.groups import (
     CreateGroupRequest,
+    UpdateGroupRequest,
     GroupListItem,
     GroupDetailResponse,
     GroupInviteResponse,
@@ -32,6 +33,7 @@ from app.services.groups import (
     delete_group,
     add_group_members,
     list_group_member_ids,
+    update_group_name,
 )
 from app.services.social_realtime import (
     close_deleted_group_sockets,
@@ -95,6 +97,47 @@ async def group_detail_route(
         )
     except PermissionError as e:
         raise permission_error(e) from e
+
+
+@router.patch("/{group_id}", response_model=GroupListItem)
+async def update_group_route(
+    group_id: UUID,
+    payload: UpdateGroupRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        group = await update_group_name(
+            db,
+            group_id=group_id,
+            owner_id=user.id,
+            name=payload.name,
+        )
+        member_ids = await list_group_member_ids(db, group_id)
+        await db.commit()
+        await db.refresh(group)
+        await publish_group_update(
+            member_ids,
+            reason="group_renamed",
+            group_id=group_id,
+        )
+        return GroupListItem(
+            id=group.id,
+            name=group.name,
+            owner_id=group.owner_id,
+            created_at=group.created_at,
+            member_count=len(member_ids),
+        )
+    except PermissionError as e:
+        await db.rollback()
+        raise permission_error(e) from e
+    except ValueError as e:
+        await db.rollback()
+        raise value_error(
+            e,
+            code_statuses={"not_found": 404},
+            detail_overrides={"not_found": "Group not found"},
+        ) from e
 
 
 @router.post("/{group_id}/invite", response_model=GroupInviteResponse, status_code=201)

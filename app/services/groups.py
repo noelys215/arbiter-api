@@ -144,6 +144,26 @@ async def get_group_detail(db: AsyncSession, group_id: UUID, user_id: UUID) -> d
     }
 
 
+async def update_group_name(
+    db: AsyncSession,
+    *,
+    group_id: UUID,
+    owner_id: UUID,
+    name: str,
+) -> Group:
+    group = (
+        await db.execute(sa.select(Group).where(Group.id == group_id))
+    ).scalar_one_or_none()
+    if group is None:
+        raise ValueError("not_found")
+    if group.owner_id != owner_id:
+        raise PermissionError("Only the group owner can change the group name")
+
+    group.name = name
+    await db.flush()
+    return group
+
+
 async def create_group_invite(db: AsyncSession, group_id: UUID, creator_id: UUID, ttl_minutes: int = 60) -> GroupInvite:
     # owner-only
     g = (await db.execute(sa.select(Group).where(Group.id == group_id))).scalar_one()

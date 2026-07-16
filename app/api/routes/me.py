@@ -9,8 +9,13 @@ from app.api.deps import get_current_user, get_db
 from app.api.http_errors import value_error
 from app.api.presenters.users import public_user_from_user
 from app.models.user import User
-from app.schemas.auth import AvatarUpdateRequest, MeResponse
+from app.schemas.auth import AvatarUpdateRequest, MeResponse, ProfileUpdateRequest
 from app.schemas.users import AVATAR_STYLE_VALUES
+from app.services.social_realtime import publish_profile_update
+from app.services.users import (
+    list_profile_update_recipient_ids,
+    update_display_name,
+)
 
 router = APIRouter(tags=["me"])
 
@@ -28,6 +33,24 @@ def _validate_avatar_update(payload: AvatarUpdateRequest) -> None:
 
 @router.get("/me", response_model=MeResponse)
 async def me(user: User = Depends(get_current_user)):
+    return MeResponse(**public_user_from_user(user))
+
+
+@router.patch("/me", response_model=MeResponse)
+async def update_profile(
+    payload: ProfileUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    recipients = await list_profile_update_recipient_ids(db, user.id)
+    await update_display_name(
+        db,
+        user=user,
+        display_name=payload.display_name,
+    )
+    await db.commit()
+    await db.refresh(user)
+    await publish_profile_update(recipients, user_id=user.id)
     return MeResponse(**public_user_from_user(user))
 
 

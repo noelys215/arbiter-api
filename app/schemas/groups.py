@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from typing import List, Literal
 from app.schemas.users import AvatarFields, InvitePublicUser
@@ -10,6 +10,26 @@ from app.schemas.users import AvatarFields, InvitePublicUser
 class CreateGroupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     member_user_ids: List[UUID] = Field(default_factory=list)  # friends to add (excluding owner is allowed)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Group name is required")
+        return cleaned
+
+
+class UpdateGroupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Group name is required")
+        return cleaned
 
 
 class GroupListItem(BaseModel):
