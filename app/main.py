@@ -12,6 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
     SessionMiddleware = None
 
 from app.core.config import settings
+from app.core.logging import configure_sensitive_path_redaction, redact_invite_tokens
 from app.api.routes.health import router as health_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.me import router as me_router
@@ -32,6 +33,7 @@ from app.api.routes.group_invites import router as group_invites_router
 
 
 logger = logging.getLogger(__name__)
+configure_sensitive_path_redaction()
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
 local_cors_origin_regex = (
@@ -47,7 +49,11 @@ async def debug_exception_handler(request: Request, exc: Exception):
             "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
             status_code=500,
         )
-    logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+    logger.exception(
+        "Unhandled exception for %s %s",
+        request.method,
+        redact_invite_tokens(request.url.path),
+    )
     return PlainTextResponse("Internal Server Error", status_code=500)
 
 if SessionMiddleware is not None:
