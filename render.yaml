@@ -57,6 +57,14 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: FEEDBACK_RECIPIENT_EMAIL
+        sync: false
+      - key: FEEDBACK_FROM_EMAIL
+        sync: false
+      - key: FEEDBACK_PUBLIC_ENABLED
+        value: "false"
+      - key: FEEDBACK_AUTHENTICATED_ENABLED
+        value: "false"
       - key: MAGIC_LINK_VERIFY_URL
         value: https://www.arbitertv.com/auth/magic-link/verify
       - key: MAGIC_LINK_EXPIRE_MINUTES

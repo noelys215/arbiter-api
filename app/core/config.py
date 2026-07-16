@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # ─────────────────────────────────────────────
     resend_api_key: str | None = Field(default=None, alias="RESEND_API_KEY")
     resend_from_email: str | None = Field(default=None, alias="RESEND_FROM_EMAIL")
+    feedback_recipient_email: str | None = Field(
+        default=None, alias="FEEDBACK_RECIPIENT_EMAIL"
+    )
+    feedback_from_email: str | None = Field(default=None, alias="FEEDBACK_FROM_EMAIL")
+    feedback_public_enabled: bool = Field(
+        default=False, alias="FEEDBACK_PUBLIC_ENABLED"
+    )
+    feedback_authenticated_enabled: bool = Field(
+        default=False, alias="FEEDBACK_AUTHENTICATED_ENABLED"
+    )
     magic_link_verify_url: str = Field(
         default="https://www.arbitertv.com/auth/magic-link/verify",
         alias="MAGIC_LINK_VERIFY_URL",
@@ -102,6 +112,12 @@ class Settings(BaseSettings):
 
     def is_local_env(self) -> bool:
         return self.env in {"local", "test"}
+
+    def feedback_public_enabled_value(self) -> bool:
+        return self.is_local_env() or self.feedback_public_enabled
+
+    def feedback_authenticated_enabled_value(self) -> bool:
+        return self.is_local_env() or self.feedback_authenticated_enabled
 
     def oauth_google_callback_url_value(self) -> str:
         if self.is_local_env():

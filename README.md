@@ -246,6 +246,10 @@ Common optional vars:
 - `OAUTH_SESSION_SECRET` (falls back to `JWT_SECRET` if unset)
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
+- `FEEDBACK_RECIPIENT_EMAIL` (server-only private recipient)
+- `FEEDBACK_FROM_EMAIL` (verified Resend sender)
+- `FEEDBACK_PUBLIC_ENABLED` (default `false`; enable only after production-safe rate limiting is configured)
+- `FEEDBACK_AUTHENTICATED_ENABLED` (default `false`; explicit acceptance of authenticated-endpoint abuse risk)
 - `MAGIC_LINK_VERIFY_URL` (production default `https://www.arbitertv.com/auth/magic-link/verify`; local runs use `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
 - `LOCAL_AUTH_BYPASS_TOKEN`: local/test-only token for `POST /auth/local-bypass`; never set this in production
@@ -267,6 +271,15 @@ routes without logging request bodies or raw invite tokens. The application
 enforces authorization, expiry, revocation, and use limits, but does not ship an
 in-process rate limiter.
 
+The same launch requirement applies to `POST /feedback`. Render's included
+DDoS protection is not a configurable per-route submission limit. Keep
+`FEEDBACK_PUBLIC_ENABLED=false` and omit `VITE_PUBLIC_FEEDBACK_ENABLED` until
+the API hostname is behind a production-safe reverse-proxy/WAF rule (for
+example, a Cloudflare rate-limiting rule of approximately 3 requests per 15
+minutes per IP), or until a shared Redis/Render Key Value-backed limiter is in
+place. Authenticated feedback is also opt-in through
+`FEEDBACK_AUTHENTICATED_ENABLED` and `VITE_ACCOUNT_FEEDBACK_ENABLED`.
+
 1) Push this backend repo and create a new Render Blueprint service from `render.yaml`.
 2) Render will provision:
 - Web service: `watchpicker-api`
@@ -276,6 +289,7 @@ in-process rate limiter.
 - `TMDB_TOKEN`: TMDB bearer token
 - `OPENAI_API_KEY`: only if you want AI reranking/parsing
 - `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: required for magic-link emails
+- `FEEDBACK_RECIPIENT_EMAIL` and `FEEDBACK_FROM_EMAIL`: required for feedback delivery
 - `MAGIC_LINK_VERIFY_URL`: where users click from email (backend verify URL or frontend verify route)
 - OAuth vars only if you are using Google OAuth
 4) Keep cookie settings for cross-domain frontend/API auth:

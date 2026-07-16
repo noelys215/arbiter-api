@@ -31,6 +31,8 @@ from app.api.routes.sessions import router as sessions_router
 from app.api.routes.invites import router as invites_router
 from app.api.routes.group_invites import router as group_invites_router
 from app.api.routes.realtime import router as realtime_router
+from app.api.routes.feedback import router as feedback_router
+from app.middleware.feedback_body_limit import FeedbackBodyLimitMiddleware
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,11 @@ if SessionMiddleware is not None:
     )
 
 app.add_middleware(
+    FeedbackBodyLimitMiddleware,
+    max_bytes=16 * 1024,
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list(),
     allow_origin_regex=local_cors_origin_regex,
@@ -78,6 +85,7 @@ app.include_router(friends_router)
 app.include_router(invites_router)
 app.include_router(group_invites_router)
 app.include_router(realtime_router)
+app.include_router(feedback_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(me_router)

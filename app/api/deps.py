@@ -52,3 +52,15 @@ async def get_current_user(
     access_token: str | None = Cookie(default=None, alias=COOKIE_NAME),
 ) -> User:
     return await get_user_from_access_token(db, access_token)
+
+
+async def get_optional_user(
+    db: AsyncSession,
+    access_token: str | None,
+) -> User | None:
+    if not access_token:
+        return None
+    try:
+        return await get_user_from_access_token(db, access_token)
+    except HTTPException:
+        return None
