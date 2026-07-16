@@ -236,9 +236,6 @@ async def _upsert_oauth_user(
 
     if user is not None:
         changed = False
-        if display_name and user.display_name != display_name:
-            user.display_name = display_name
-            changed = True
         if avatar_url and user.avatar_url != avatar_url:
             user.avatar_url = avatar_url
             changed = True

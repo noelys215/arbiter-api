@@ -45,6 +45,26 @@ async def test_display_name_rejects_blank_value(client, user_factory, login_help
     assert response.status_code == 422
 
 
+async def test_oauth_login_preserves_custom_display_name(
+    client,
+    db_session,
+    user_factory,
+):
+    from app.api.routes.auth import _upsert_oauth_user
+
+    user_data = await user_factory(client, display_name="Chosen Name")
+
+    user = await _upsert_oauth_user(
+        db_session,
+        email=user_data["email"],
+        display_name="Provider Name",
+        avatar_url="https://example.com/provider-avatar.png",
+    )
+
+    assert user.display_name == "Chosen Name"
+    assert user.avatar_url == "https://example.com/provider-avatar.png"
+
+
 async def test_social_oauth_endpoints_require_provider_config(client):
     google = await client.get("/auth/google/login")
     facebook = await client.get("/auth/facebook/login")
