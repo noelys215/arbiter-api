@@ -106,6 +106,41 @@ async def test_revoking_friend_invite_invalidates_token_and_code(
     assert code_accept.status_code == 410
 
 
+async def test_valid_group_invite_preview_returns_public_group_context(
+    client, user_factory, login_helper
+):
+    user = await user_factory(client, display_name="Preview Host")
+    await login_helper(client, email=user["email"], password=user["password"])
+    group = (await client.post("/groups", json={"name": "Preview Club"})).json()
+    invite = (
+        await client.post(
+            f"/groups/{group['id']}/invites",
+            json={"target_user_id": None, "max_uses": 25},
+        )
+    ).json()
+
+    client.cookies.clear()
+    response = await client.get(f"/invites/group/{invite['token']}")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "group_id": group["id"],
+        "group_name": "Preview Club",
+        "inviter": {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": "Preview Host",
+            "avatar_url": None,
+            "avatar_source": None,
+            "avatar_style": None,
+            "avatar_seed": None,
+        },
+        "member_count": 1,
+        "expires_at": invite["expires_at"],
+        "targeted": False,
+    }
+
+
 async def test_targeted_group_invite_requires_acceptance_and_is_idempotent(
     client, client_factory, user_factory, login_helper
 ):

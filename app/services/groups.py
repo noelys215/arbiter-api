@@ -271,8 +271,12 @@ async def preview_group_invite(
     row = (
         await db.execute(
             sa.select(Group, User, sa.func.count(GroupMembership.id))
+            .select_from(Group)
             .join(User, User.id == invite.created_by_user_id)
-            .outerjoin(GroupMembership, GroupMembership.group_id == Group.id)
+            .outerjoin(
+                GroupMembership,
+                GroupMembership.group_id == Group.id,
+            )
             .where(Group.id == invite.group_id)
             .group_by(Group.id, User.id)
         )
