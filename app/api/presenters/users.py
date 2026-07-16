@@ -50,3 +50,12 @@ def public_user_from_user(user: User) -> dict[str, object | None]:
         "display_name": user.display_name,
         **avatar_fields_from_user(user),
     }
+
+
+def invite_user_from_user(user: User) -> dict[str, object | None]:
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "display_name": user.display_name,
+        **avatar_fields_from_user(user),
+    }

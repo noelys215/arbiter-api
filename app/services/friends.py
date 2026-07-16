@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -9,6 +10,12 @@ from sqlalchemy.orm import aliased
 from app.models.friend_invite import FriendInvite
 from app.models.friendship import Friendship
 from app.models.user import User
+from app.services.invitations import (
+    ensure_invite_active,
+    hash_invite_token,
+    new_invite_token,
+    terminate_invite,
+)
 
 
 def _make_code(length: int = 10) -> str:
@@ -16,7 +23,7 @@ def _make_code(length: int = 10) -> str:
     return secrets.token_urlsafe(16).replace("-", "").replace("_", "")[:length]
 
 
-def _pair(a: str, b: str) -> tuple[str, str]:
+def _pair(a: UUID, b: UUID) -> tuple[UUID, UUID]:
     return (a, b) if a < b else (b, a)
 
 
@@ -44,7 +51,92 @@ async def create_friend_invite(db: AsyncSession, user_id, ttl_minutes: int = 60)
     raise RuntimeError("Failed to generate unique invite code")
 
 
-async def accept_friend_invite(db: AsyncSession, current_user_id, code: str) -> None:
+async def create_friend_link_invite(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    ttl_days: int = 7,
+) -> tuple[FriendInvite, str]:
+    expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
+    token, token_hash = new_invite_token()
+
+    for _ in range(10):
+        code = _make_code()
+        code_exists = (
+            await db.execute(select(FriendInvite.id).where(FriendInvite.code == code))
+        ).scalar_one_or_none()
+        if code_exists is not None:
+            continue
+        invite = FriendInvite(
+            code=code,
+            token_hash=token_hash,
+            created_by_user_id=user_id,
+            expires_at=expires_at,
+            max_uses=1,
+            uses_count=0,
+        )
+        db.add(invite)
+        await db.flush()
+        return invite, token
+
+    raise RuntimeError("Failed to generate unique invite code")
+
+
+async def get_friend_invite_by_token(
+    db: AsyncSession,
+    token: str,
+    *,
+    lock: bool = False,
+) -> FriendInvite:
+    query = select(FriendInvite).where(
+        FriendInvite.token_hash == hash_invite_token(token)
+    )
+    if lock:
+        query = query.with_for_update()
+    invite = (await db.execute(query)).scalar_one_or_none()
+    if invite is None:
+        raise ValueError("invalid_invite")
+    ensure_invite_active(invite)
+    return invite
+
+
+async def preview_friend_invite(db: AsyncSession, token: str) -> tuple[FriendInvite, User]:
+    invite = await get_friend_invite_by_token(db, token)
+    inviter = (
+        await db.execute(select(User).where(User.id == invite.created_by_user_id))
+    ).scalar_one()
+    return invite, inviter
+
+
+async def _accept_friend_invite_record(
+    db: AsyncSession,
+    current_user_id: UUID,
+    invite: FriendInvite,
+) -> bool:
+    ensure_invite_active(invite)
+    if invite.created_by_user_id == current_user_id:
+        raise ValueError("cannot_friend_self")
+
+    low, high = _pair(invite.created_by_user_id, current_user_id)
+    existing = (
+        await db.execute(
+            select(Friendship).where(
+                and_(Friendship.user_low_id == low, Friendship.user_high_id == high)
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return True
+    if invite.uses_count >= invite.max_uses:
+        raise ValueError("used_invite")
+
+    db.add(Friendship(user_low_id=low, user_high_id=high))
+    invite.uses_count += 1
+    await db.flush()
+    return False
+
+
+async def accept_friend_invite(db: AsyncSession, current_user_id: UUID, code: str) -> bool:
     # Lock the invite row so uses_count is atomic
     invite = (
         await db.execute(
@@ -56,37 +148,41 @@ async def accept_friend_invite(db: AsyncSession, current_user_id, code: str) -> 
 
     if not invite:
         raise ValueError("invalid_code")
+    try:
+        return await _accept_friend_invite_record(db, current_user_id, invite)
+    except ValueError as exc:
+        code_map = {
+            "expired_invite": "expired_code",
+            "revoked_invite": "revoked_code",
+            "used_invite": "used_code",
+        }
+        raise ValueError(code_map.get(str(exc), str(exc))) from exc
 
-    now = datetime.now(timezone.utc)
-    if invite.expires_at <= now:
-        raise ValueError("expired_code")
 
-    if str(invite.created_by_user_id) == str(current_user_id):
-        raise ValueError("cannot_friend_self")
+async def accept_friend_link_invite(
+    db: AsyncSession,
+    current_user_id: UUID,
+    token: str,
+) -> bool:
+    invite = await get_friend_invite_by_token(db, token, lock=True)
+    return await _accept_friend_invite_record(db, current_user_id, invite)
 
-    low, high = _pair(str(invite.created_by_user_id), str(current_user_id))
 
-    existing = (
+async def revoke_friend_invite(
+    db: AsyncSession,
+    current_user_id: UUID,
+    invite_id: UUID,
+) -> None:
+    invite = (
         await db.execute(
-            select(Friendship).where(
-                and_(Friendship.user_low_id == low, Friendship.user_high_id == high)
-            )
+            select(FriendInvite).where(FriendInvite.id == invite_id).with_for_update()
         )
     ).scalar_one_or_none()
-
-    if existing:
-        # Idempotent success if users are already friends.
-        # If the code is still unused, consume it once to preserve single-use behavior.
-        if invite.uses_count < invite.max_uses:
-            invite.uses_count += 1
-            await db.flush()
-        return
-
-    if invite.uses_count >= invite.max_uses:
-        raise ValueError("used_code")
-
-    db.add(Friendship(user_low_id=low, user_high_id=high))
-    invite.uses_count += 1
+    if invite is None:
+        raise ValueError("invalid_invite")
+    if invite.created_by_user_id != current_user_id:
+        raise PermissionError("Only the invite creator can revoke this invitation")
+    terminate_invite(invite)
     await db.flush()
 
 
@@ -109,11 +205,11 @@ async def list_friends(db: AsyncSession, current_user_id):
     return rows
 
 
-async def unfriend(db: AsyncSession, current_user_id, other_user_id) -> None:
-    if str(current_user_id) == str(other_user_id):
+async def unfriend(db: AsyncSession, current_user_id: UUID, other_user_id: UUID) -> None:
+    if current_user_id == other_user_id:
         raise ValueError("cannot_unfriend_self")
 
-    low, high = _pair(str(current_user_id), str(other_user_id))
+    low, high = _pair(current_user_id, other_user_id)
     existing = (
         await db.execute(
             select(Friendship).where(

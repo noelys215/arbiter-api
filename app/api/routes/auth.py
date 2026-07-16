@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -35,6 +35,7 @@ from app.services.magic_link_email import (
     send_magic_link_email,
 )
 from app.services.oauth import get_oauth_client, oauth_error_cls
+from app.core.return_paths import validate_invite_return_path
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,6 +98,14 @@ def _oauth_failure_redirect(reason: str) -> RedirectResponse:
 def _append_query_param(url: str, key: str, value: str) -> str:
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}{key}={quote_plus(value)}"
+
+
+def _frontend_success_destination(return_to: str | None) -> str:
+    base = urlsplit(settings.oauth_frontend_success_url_value())
+    path = validate_invite_return_path(return_to)
+    if path is None:
+        return settings.oauth_frontend_success_url_value()
+    return urlunsplit((base.scheme, base.netloc, path, "", ""))
 
 
 def _google_callback_url_for_request(request: Request) -> str:
@@ -263,7 +272,12 @@ async def request_magic_link(payload: MagicLinkRequest):
         )
 
     normalized_email = payload.email.strip().lower()
-    token = create_magic_link_token(normalized_email)
+    return_to = None
+    if payload.return_to is not None:
+        return_to = validate_invite_return_path(payload.return_to)
+        if return_to is None:
+            raise HTTPException(status_code=400, detail="Invalid return path")
+    token = create_magic_link_token(normalized_email, return_to)
     magic_link_url = build_magic_link(token)
     try:
         await send_magic_link_email(to_email=normalized_email, magic_link_url=magic_link_url)
@@ -283,7 +297,7 @@ async def request_magic_link(payload: MagicLinkRequest):
 
 @router.get("/magic-link/verify")
 async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_session)):
-    email, token_error = decode_magic_link_token(token)
+    email, token_error, return_to = decode_magic_link_token(token)
     if token_error or not email:
         reason = "magic_link_expired" if token_error == "expired" else "magic_link_invalid"
         return _oauth_failure_redirect(reason)
@@ -303,7 +317,7 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
         await db.refresh(user)
 
     destination = _append_query_param(
-        settings.oauth_frontend_success_url_value(),
+        _frontend_success_destination(return_to),
         "auth",
         "magic-link",
     )
@@ -395,9 +409,15 @@ async def local_auth_bypass(
 
 
 @router.get("/google/login")
-async def google_login(request: Request):
+async def google_login(request: Request, return_to: str | None = None):
     client = _require_oauth_client("google")
     _require_oauth_session(request)
+    request.session.pop("invite_return_to", None)
+    if return_to is not None:
+        validated = validate_invite_return_path(return_to)
+        if validated is None:
+            raise HTTPException(status_code=400, detail="Invalid return path")
+        request.session["invite_return_to"] = validated
     return await client.authorize_redirect(request, _google_callback_url_for_request(request))
 
 
@@ -406,6 +426,7 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
     client = _require_oauth_client("google")
     _require_oauth_session(request)
 
+    return_to = request.session.pop("invite_return_to", None)
     try:
         token = await client.authorize_access_token(request)
         userinfo: dict[str, object] = {}
@@ -452,7 +473,7 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
     )
 
     response = RedirectResponse(
-        url=settings.oauth_frontend_success_url_value(),
+        url=_frontend_success_destination(return_to),
         status_code=status.HTTP_302_FOUND,
     )
     _set_auth_cookie(response, str(user.id))

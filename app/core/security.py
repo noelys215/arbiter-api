@@ -44,7 +44,7 @@ def create_access_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_magic_link_token(email: str) -> str:
+def create_magic_link_token(email: str, return_to: str | None = None) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.magic_link_expire_minutes)
     payload = {
@@ -53,23 +53,28 @@ def create_magic_link_token(email: str) -> str:
         "exp": int(expire.timestamp()),
         "typ": "magic_login",
     }
+    if return_to:
+        payload["return_to"] = return_to
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def decode_magic_link_token(token: str) -> tuple[str | None, str | None]:
+def decode_magic_link_token(
+    token: str,
+) -> tuple[str | None, str | None, str | None]:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except ExpiredSignatureError:
-        return None, "expired"
+        return None, "expired", None
     except JWTError:
-        return None, "invalid"
+        return None, "invalid", None
 
     token_type = payload.get("typ")
     subject = payload.get("sub")
     if token_type != "magic_login" or not isinstance(subject, str):
-        return None, "invalid"
+        return None, "invalid", None
 
     email = subject.strip().lower()
     if not email:
-        return None, "invalid"
-    return email, None
+        return None, "invalid", None
+    return_to = payload.get("return_to")
+    return email, None, return_to if isinstance(return_to, str) else None

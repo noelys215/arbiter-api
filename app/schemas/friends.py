@@ -3,12 +3,29 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from datetime import datetime
 from uuid import UUID
-from app.schemas.users import AvatarFields
+from app.schemas.users import AvatarFields, InvitePublicUser
 
 
 class FriendInviteCreateResponse(BaseModel):
     code: str
     expires_at: datetime
+
+
+class FriendLinkInviteCreateResponse(FriendInviteCreateResponse):
+    id: UUID
+    token: str
+    max_uses: int
+    uses_count: int
+
+
+class FriendInvitePreview(BaseModel):
+    inviter: InvitePublicUser
+    expires_at: datetime
+
+
+class FriendInviteAcceptResponse(BaseModel):
+    ok: bool
+    already_friends: bool = False
 
 
 class FriendAcceptRequest(BaseModel):

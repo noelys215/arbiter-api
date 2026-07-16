@@ -34,3 +34,9 @@ class PublicUser(AvatarFields):
     email: str
     username: str
     display_name: str
+
+
+class InvitePublicUser(AvatarFields):
+    id: UUID
+    username: str
+    display_name: str

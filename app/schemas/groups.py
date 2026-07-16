@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pydantic import BaseModel, Field
 from uuid import UUID
-from typing import List
-from app.schemas.users import AvatarFields
+from typing import List, Literal
+from app.schemas.users import AvatarFields, InvitePublicUser
 
 
 class CreateGroupRequest(BaseModel):
@@ -40,6 +40,49 @@ class GroupInviteResponse(BaseModel):
     expires_at: datetime
     max_uses: int
     uses_count: int
+
+
+class CreateGroupInviteRequest(BaseModel):
+    target_user_id: UUID | None = None
+    max_uses: int = Field(default=25, ge=1, le=50)
+
+
+class GroupLinkInviteResponse(GroupInviteResponse):
+    id: UUID
+    token: str
+    group_id: UUID
+    target_user_id: UUID | None = None
+
+
+class GroupInvitePreview(BaseModel):
+    group_id: UUID
+    group_name: str
+    inviter: InvitePublicUser
+    member_count: int
+    expires_at: datetime
+    targeted: bool
+
+
+class GroupInvitationListItem(BaseModel):
+    id: UUID
+    group_id: UUID
+    group_name: str
+    inviter: InvitePublicUser
+    target: InvitePublicUser | None = None
+    expires_at: datetime
+    max_uses: int
+    uses_count: int
+    targeted: bool
+
+
+class GroupInviteDecisionRequest(BaseModel):
+    decision: Literal["accept", "decline"]
+
+
+class GroupInviteDecisionResponse(BaseModel):
+    ok: bool
+    decision: Literal["accepted", "declined"]
+    already_member: bool = False
 
 
 class AcceptGroupInviteRequest(BaseModel):
