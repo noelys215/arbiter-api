@@ -32,6 +32,7 @@ from app.services.sessions import (
     undo_vote,
 )
 from app.services.session_realtime import session_realtime_hub
+from app.core.websocket_security import reject_disallowed_websocket_origin
 
 router = APIRouter(tags=["sessions"])
 
@@ -221,17 +222,24 @@ async def undo_vote_route(
 
 @router.websocket("/sessions/{session_id}/ws")
 async def session_updates_ws(websocket: WebSocket, session_id: UUID):
+    if await reject_disallowed_websocket_origin(websocket):
+        return
     access_token = websocket.cookies.get(COOKIE_NAME)
     async for db in get_db():
         try:
             user = await get_user_from_access_token(db, access_token)
-            await get_session_state(db, session_id=session_id, user_id=user.id)
+            view = await get_session_state(db, session_id=session_id, user_id=user.id)
         except Exception:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         break
 
-    await session_realtime_hub.connect(session_id, websocket)
+    await session_realtime_hub.connect(
+        session_id,
+        user.id,
+        view.session.group_id,
+        websocket,
+    )
     try:
         await websocket.send_json(
             {

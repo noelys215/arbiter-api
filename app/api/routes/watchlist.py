@@ -29,6 +29,7 @@ from app.services.watchlist import (
     patch_watchlist_item,
 )
 from app.services.watchlist_realtime import watchlist_realtime_hub
+from app.core.websocket_security import reject_disallowed_websocket_origin
 
 router = APIRouter(tags=["watchlist"])
 
@@ -104,6 +105,8 @@ async def add_watchlist_route(
 
 @router.websocket("/groups/{group_id}/watchlist/ws")
 async def watchlist_updates_ws(websocket: WebSocket, group_id: UUID):
+    if await reject_disallowed_websocket_origin(websocket):
+        return
     access_token = websocket.cookies.get(COOKIE_NAME)
     async for db in get_db():
         try:
@@ -114,7 +117,7 @@ async def watchlist_updates_ws(websocket: WebSocket, group_id: UUID):
             return
         break
 
-    await watchlist_realtime_hub.connect(group_id, websocket)
+    await watchlist_realtime_hub.connect(group_id, user.id, websocket)
     try:
         await websocket.send_json(
             {

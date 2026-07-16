@@ -30,6 +30,7 @@ from app.api.routes.watchlist import router as watchlist_router
 from app.api.routes.sessions import router as sessions_router
 from app.api.routes.invites import router as invites_router
 from app.api.routes.group_invites import router as group_invites_router
+from app.api.routes.realtime import router as realtime_router
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ app.add_middleware(
 app.include_router(friends_router)
 app.include_router(invites_router)
 app.include_router(group_invites_router)
+app.include_router(realtime_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(me_router)
