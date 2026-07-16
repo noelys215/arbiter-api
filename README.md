@@ -290,6 +290,11 @@ Notes:
 - Docker is not required for this Render setup.
 - `DATABASE_URL` is auto-wired from the managed Postgres instance.
 - Health check endpoint is `GET /health`.
+- Realtime connection rooms are process-local. The checked-in Render Blueprint
+  uses the default single service instance, and its `uvicorn` start command does
+  not configure additional workers. Before adding workers, horizontal scaling,
+  or overlapping service instances, move realtime fan-out to a shared broker
+  such as Redis pub/sub so events reach sockets connected to every process.
 
 ## Running tests
 
