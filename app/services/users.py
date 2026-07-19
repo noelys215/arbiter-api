@@ -77,11 +77,13 @@ async def find_user_by_friend_identifier(
         ).scalar_one_or_none()
 
     if "@" in normalized:
-        return (
+        email_match = (
             await db.execute(
                 sa.select(User).where(sa.func.lower(User.email) == normalized)
             )
         ).scalar_one_or_none()
+        if email_match is not None:
+            return email_match
 
     username_match = (
         await db.execute(

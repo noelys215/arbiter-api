@@ -156,13 +156,20 @@ async def test_friend_request_accepts_email_username_and_display_name(
     await login_helper(client, email=sender["email"], password=sender["password"])
     recipients = [
         await user_factory(client, display_name=unique_str(label))
-        for label in ("Email Friend", "Username Friend", "At User", "Display Friend")
+        for label in (
+            "Email Friend",
+            "Username Friend",
+            "At User",
+            "Display Friend",
+            "Screening@Home",
+        )
     ]
     identifiers = [
         recipients[0]["email"].upper(),
         recipients[1]["username"].swapcase(),
         f"@{recipients[2]['username'].swapcase()}",
         recipients[3]["display_name"].swapcase(),
+        recipients[4]["display_name"].swapcase(),
     ]
 
     for recipient, identifier in zip(recipients, identifiers, strict=True):
