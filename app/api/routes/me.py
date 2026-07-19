@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -42,13 +43,29 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    recipients = await list_profile_update_recipient_ids(db, user.id)
-    await update_display_name(
-        db,
-        user=user,
-        display_name=payload.display_name,
-    )
-    await db.commit()
+    try:
+        recipients = await list_profile_update_recipient_ids(db, user.id)
+        await update_display_name(
+            db,
+            user=user,
+            display_name=payload.display_name,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise value_error(
+            exc,
+            code_statuses={"display_name_taken": 409},
+            detail_overrides={"display_name_taken": "Display name already in use"},
+            default_detail="Could not update display name",
+        ) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        raise value_error(
+            ValueError("display_name_taken"),
+            code_statuses={"display_name_taken": 409},
+            detail_overrides={"display_name_taken": "Display name already in use"},
+        ) from exc
     await db.refresh(user)
     await publish_profile_update(recipients, user_id=user.id)
     return MeResponse(**public_user_from_user(user))

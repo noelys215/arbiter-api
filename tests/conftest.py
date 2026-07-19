@@ -115,6 +115,7 @@ def user_factory(unique_str):
         email = email or f"{unique_str('user')}@example.com"
         username = username or unique_str("user")
         display_name = display_name or username
+        requested_display_name = display_name
         r = await client.post(
             "/auth/register",
             json={
@@ -124,6 +125,18 @@ def user_factory(unique_str):
                 "password": password,
             },
         )
+        if r.status_code == 409 and r.json().get("detail") == "Display name already in use":
+            suffix = f" {unique_str('name')[-6:]}"
+            display_name = f"{requested_display_name[: 120 - len(suffix)]}{suffix}"
+            r = await client.post(
+                "/auth/register",
+                json={
+                    "email": email,
+                    "username": username,
+                    "display_name": display_name,
+                    "password": password,
+                },
+            )
         assert r.status_code in (200, 201), r.text
         data = r.json()
         assert "id" in data

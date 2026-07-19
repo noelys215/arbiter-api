@@ -46,7 +46,7 @@ async def send_friend_request(
     user: User = Depends(get_current_user),
 ):
     try:
-        result = await create_friend_request(db, user.id, str(payload.email))
+        result = await create_friend_request(db, user.id, payload.identifier)
         await db.commit()
         if result.changed and result.target_user_id is not None:
             await publish_friend_request_update(

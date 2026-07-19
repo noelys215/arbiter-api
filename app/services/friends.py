@@ -12,6 +12,7 @@ from app.models.friend_invite import FriendInvite
 from app.models.friendship import Friendship
 from app.models.user import User
 from app.services.invitations import ensure_invite_active, terminate_invite
+from app.services.users import find_user_by_friend_identifier
 
 
 @dataclass(frozen=True)
@@ -37,16 +38,11 @@ def _pair(a: UUID, b: UUID) -> tuple[UUID, UUID]:
 async def create_friend_request(
     db: AsyncSession,
     current_user_id: UUID,
-    email: str,
+    identifier: str,
     *,
     ttl_days: int = 7,
 ) -> FriendRequestCreationResult:
-    normalized_email = email.strip().casefold()
-    target = (
-        await db.execute(
-            select(User).where(sa.func.lower(User.email) == normalized_email)
-        )
-    ).scalar_one_or_none()
+    target = await find_user_by_friend_identifier(db, identifier)
 
     # Keep account lookup private: an unknown address behaves like a successful no-op.
     if target is None:

@@ -399,7 +399,7 @@ sequenceDiagram
   participant API
   participant DB
 
-  A->>API: POST /friends/requests {email}
+  A->>API: POST /friends/requests {identifier}
   API->>DB: INSERT targeted friend request
   API-->>A: 201 {ok:true}
 

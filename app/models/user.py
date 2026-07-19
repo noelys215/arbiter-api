@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 import sqlalchemy as sa
-from sqlalchemy import String, DateTime, func
+from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,7 +16,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
-    username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    username: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
 
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -31,3 +31,8 @@ class User(Base):
     
     owned_groups = relationship("Group", back_populates="owner")
     group_memberships = relationship("GroupMembership", back_populates="user")
+
+    __table_args__ = (
+        sa.Index("uq_users_username_lower", sa.func.lower(username), unique=True),
+        sa.Index("uq_users_display_name_lower", sa.func.lower(display_name), unique=True),
+    )

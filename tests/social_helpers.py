@@ -12,7 +12,7 @@ async def create_friendship(
     *,
     recipient_email: str,
 ) -> str:
-    created = await sender.post("/friends/requests", json={"email": recipient_email})
+    created = await sender.post("/friends/requests", json={"identifier": recipient_email})
     assert created.status_code == 201, created.text
     outgoing = (await sender.get("/friends/requests")).json()["outgoing"]
     request_id = outgoing[0]["id"]
@@ -53,7 +53,7 @@ async def create_friendship_with_tokens(
     recipient_email: str,
 ) -> str:
     act_as(client, sender_token)
-    created = await client.post("/friends/requests", json={"email": recipient_email})
+    created = await client.post("/friends/requests", json={"identifier": recipient_email})
     assert created.status_code == 201, created.text
     request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
     act_as(client, recipient_token)

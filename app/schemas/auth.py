@@ -9,6 +9,14 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)  # allow chars, enforce bytes below
 
+    @field_validator("username", "display_name")
+    @classmethod
+    def clean_account_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Account name is required")
+        return cleaned
+
     @field_validator("password")
     @classmethod
     def password_bcrypt_bytes(cls, v: str) -> str:

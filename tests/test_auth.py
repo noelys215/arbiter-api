@@ -45,6 +45,53 @@ async def test_display_name_rejects_blank_value(client, user_factory, login_help
     assert response.status_code == 422
 
 
+async def test_registration_rejects_case_insensitive_account_name_conflicts(
+    client, user_factory, unique_str
+):
+    existing = await user_factory(
+        client,
+        username=unique_str("UniqueUser"),
+        display_name=unique_str("Unique Display"),
+    )
+    payload = {
+        "email": f"{unique_str('email')}@example.com",
+        "username": existing["username"].swapcase(),
+        "display_name": unique_str("Another Display"),
+        "password": "SuperSecret123",
+    }
+    response = await client.post("/auth/register", json=payload)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Username already in use"
+
+    payload.update(
+        email=f"{unique_str('email')}@example.com",
+        username=unique_str("another_user"),
+        display_name=existing["display_name"].swapcase(),
+    )
+    response = await client.post("/auth/register", json=payload)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Display name already in use"
+
+
+async def test_profile_display_name_conflicts_are_case_insensitive(
+    client, user_factory, login_helper, unique_str
+):
+    current = await user_factory(client, display_name=unique_str("Current Name"))
+    other = await user_factory(client, display_name=unique_str("Taken Name"))
+    await login_helper(client, email=current["email"], password=current["password"])
+
+    response = await client.patch(
+        "/me", json={"display_name": other["display_name"].swapcase()}
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Display name already in use"
+
+    response = await client.patch(
+        "/me", json={"display_name": current["display_name"].swapcase()}
+    )
+    assert response.status_code == 200
+
+
 async def test_oauth_login_preserves_custom_display_name(
     client,
     db_session,

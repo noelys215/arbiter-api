@@ -13,12 +13,13 @@ def _u(prefix: str) -> str:
 
 
 async def register_user(client, *, email: str, username: str, display_name: str, password: str) -> str:
+    unique_display_name = f"{display_name} {username}"
     r = await client.post(
         "/auth/register",
         json={
             "email": email,
             "username": username,
-            "display_name": display_name,
+            "display_name": unique_display_name[:120],
             "password": password,
         },
     )
@@ -53,7 +54,7 @@ async def create_friendship(
     client, *, token_a: str, token_b: str, recipient_email: str
 ) -> None:
     act_as_token(client, token_a)
-    r = await client.post("/friends/requests", json={"email": recipient_email})
+    r = await client.post("/friends/requests", json={"identifier": recipient_email})
     assert r.status_code == 201, r.text
     request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
 

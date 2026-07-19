@@ -2,14 +2,22 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from uuid import UUID
 from app.schemas.users import AvatarFields, InvitePublicUser
 
 
 class FriendRequestCreate(BaseModel):
-    email: EmailStr
+    identifier: str = Field(min_length=1, max_length=320)
+
+    @field_validator("identifier")
+    @classmethod
+    def clean_identifier(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Email, username, or display name is required")
+        return cleaned
 
 
 class FriendRequestCreateResponse(BaseModel):

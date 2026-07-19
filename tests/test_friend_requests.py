@@ -24,7 +24,7 @@ async def test_targeted_friend_request_is_listed_and_accepted_without_groups(
         client, client_factory, user_factory, login_helper
     )
 
-    created = await client.post("/friends/requests", json={"email": user_b["email"]})
+    created = await client.post("/friends/requests", json={"identifier": user_b["email"]})
     assert created.status_code == 201
     assert created.json() == {"ok": True}
 
@@ -70,22 +70,22 @@ async def test_friend_request_prevents_self_existing_and_duplicate_requests(
         client, client_factory, user_factory, login_helper
     )
     self_request = await client.post(
-        "/friends/requests", json={"email": user_a["email"]}
+        "/friends/requests", json={"identifier": user_a["email"]}
     )
     assert self_request.status_code == 400
 
     assert (
-        await client.post("/friends/requests", json={"email": user_b["email"]})
+        await client.post("/friends/requests", json={"identifier": user_b["email"]})
     ).status_code == 201
     duplicate = await client.post(
-        "/friends/requests", json={"email": user_b["email"]}
+        "/friends/requests", json={"identifier": user_b["email"]}
     )
     assert duplicate.status_code == 409
 
     async with client_factory() as client_b:
         client_b.cookies.set("access_token", token_b)
         reverse = await client_b.post(
-            "/friends/requests", json={"email": user_a["email"]}
+            "/friends/requests", json={"identifier": user_a["email"]}
         )
         assert reverse.status_code == 409
         request_id = (await client_b.get("/friends/requests")).json()["incoming"][0]["id"]
@@ -97,7 +97,7 @@ async def test_friend_request_prevents_self_existing_and_duplicate_requests(
         ).status_code == 200
 
     already_friends = await client.post(
-        "/friends/requests", json={"email": user_b["email"]}
+        "/friends/requests", json={"identifier": user_b["email"]}
     )
     assert already_friends.status_code == 409
 
@@ -108,7 +108,7 @@ async def test_friend_request_decline_cancel_and_recipient_authorization(
     user_a, user_b, token_b = await _two_users(
         client, client_factory, user_factory, login_helper
     )
-    await client.post("/friends/requests", json={"email": user_b["email"]})
+    await client.post("/friends/requests", json={"identifier": user_b["email"]})
     request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
 
     unauthorized = await client.post(
@@ -125,7 +125,7 @@ async def test_friend_request_decline_cancel_and_recipient_authorization(
         assert declined.status_code == 200
         assert declined.json()["decision"] == "declined"
 
-    await client.post("/friends/requests", json={"email": user_b["email"]})
+    await client.post("/friends/requests", json={"identifier": user_b["email"]})
     second_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
     cancelled = await client.delete(f"/friends/requests/{second_id}")
     assert cancelled.status_code == 200
@@ -139,7 +139,7 @@ async def test_unknown_email_is_a_private_successful_noop(
     await login_helper(client, email=user["email"], password=user["password"])
 
     response = await client.post(
-        "/friends/requests", json={"email": "missing-account@example.com"}
+        "/friends/requests", json={"identifier": "missing-account@example.com"}
     )
     assert response.status_code == 201
     assert response.json() == {"ok": True}
@@ -147,6 +147,35 @@ async def test_unknown_email_is_a_private_successful_noop(
         "incoming": [],
         "outgoing": [],
     }
+
+
+async def test_friend_request_accepts_email_username_and_display_name(
+    client, user_factory, login_helper, unique_str
+):
+    sender = await user_factory(client, display_name=unique_str("Sender"))
+    await login_helper(client, email=sender["email"], password=sender["password"])
+    recipients = [
+        await user_factory(client, display_name=unique_str(label))
+        for label in ("Email Friend", "Username Friend", "At User", "Display Friend")
+    ]
+    identifiers = [
+        recipients[0]["email"].upper(),
+        recipients[1]["username"].swapcase(),
+        f"@{recipients[2]['username'].swapcase()}",
+        recipients[3]["display_name"].swapcase(),
+    ]
+
+    for recipient, identifier in zip(recipients, identifiers, strict=True):
+        response = await client.post(
+            "/friends/requests", json={"identifier": identifier}
+        )
+        assert response.status_code == 201
+        outgoing = (await client.get("/friends/requests")).json()["outgoing"]
+        assert len(outgoing) == 1
+        assert outgoing[0]["user"]["id"] == recipient["id"]
+        assert (
+            await client.delete(f"/friends/requests/{outgoing[0]['id']}")
+        ).status_code == 200
 
 
 async def test_friend_request_emits_compact_updates_after_commit(
@@ -169,7 +198,7 @@ async def test_friend_request_emits_compact_updates_after_commit(
     monkeypatch.setattr(friend_routes, "publish_friend_request_update", record_request)
     monkeypatch.setattr(friend_routes, "publish_friendship_update", record_friendship)
 
-    await client.post("/friends/requests", json={"email": user_b["email"]})
+    await client.post("/friends/requests", json={"identifier": user_b["email"]})
     request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
     async with client_factory() as client_b:
         client_b.cookies.set("access_token", token_b)

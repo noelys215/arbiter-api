@@ -6,7 +6,9 @@ from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -35,6 +37,11 @@ from app.services.magic_link_email import (
     send_magic_link_email,
 )
 from app.services.oauth import get_oauth_client, oauth_error_cls
+from app.services.users import (
+    ensure_account_names_available,
+    generate_unique_display_name,
+    username_exists,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -190,18 +197,13 @@ def _default_display_name_from_email(email: str) -> str:
     return local_part[:120]
 
 
-async def _username_exists(db: AsyncSession, username: str) -> bool:
-    result = await db.execute(select(User.id).where(User.username == username))
-    return result.scalar_one_or_none() is not None
-
-
 async def _generate_unique_username(db: AsyncSession, seed: str) -> str:
     base = _USERNAME_SAFE_RE.sub("_", seed.lower()).strip("_")
     if not base:
         base = "user"
     base = base[:_USERNAME_MAX_LEN]
 
-    if not await _username_exists(db, base):
+    if not await username_exists(db, base):
         return base
 
     prefix_len = _USERNAME_MAX_LEN - 9  # underscore + 8-char suffix
@@ -209,7 +211,7 @@ async def _generate_unique_username(db: AsyncSession, seed: str) -> str:
     for _ in range(30):
         suffix = secrets.token_hex(4)
         candidate = f"{prefix}_{suffix}"
-        if not await _username_exists(db, candidate):
+        if not await username_exists(db, candidate):
             return candidate
 
     raise HTTPException(status_code=500, detail="Unable to generate username")
@@ -237,11 +239,12 @@ async def _upsert_oauth_user(
 
     username_seed = email.split("@", 1)[0]
     username = await _generate_unique_username(db, username_seed)
+    unique_display_name = await generate_unique_display_name(db, display_name)
     social_password = secrets.token_urlsafe(32)
     user = User(
         email=email,
         username=username,
-        display_name=display_name,
+        display_name=unique_display_name,
         avatar_url=avatar_url,
         password_hash=hash_password(social_password),
     )
@@ -289,10 +292,13 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
     user = result.scalar_one_or_none()
     if user is None:
         username = await _generate_unique_username(db, email.split("@", 1)[0])
+        display_name = await generate_unique_display_name(
+            db, _default_display_name_from_email(email)
+        )
         user = User(
             email=email,
             username=username,
-            display_name=_default_display_name_from_email(email),
+            display_name=display_name,
             password_hash=hash_password(secrets.token_urlsafe(32)),
         )
         db.add(user)
@@ -312,11 +318,24 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
 @router.post("/register", response_model=RegisterResponse, status_code=201)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_session)):
     result = await db.execute(
-        select(User).where((User.email == payload.email) | (User.username == payload.username))
+        select(User).where(sa.func.lower(User.email) == str(payload.email).lower())
     )
     existing = result.scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=409, detail="Email or username already in use")
+        raise HTTPException(status_code=409, detail="Email already in use")
+    try:
+        await ensure_account_names_available(
+            db,
+            username=payload.username,
+            display_name=payload.display_name,
+        )
+    except ValueError as exc:
+        detail = (
+            "Username already in use"
+            if str(exc) == "username_taken"
+            else "Display name already in use"
+        )
+        raise HTTPException(status_code=409, detail=detail) from exc
 
     user = User(
         email=payload.email,
@@ -325,7 +344,14 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_s
         password_hash=hash_password(payload.password),
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Username or display name already in use",
+        ) from exc
     await db.refresh(user)
 
     return RegisterResponse(id=str(user.id))
