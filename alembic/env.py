@@ -6,7 +6,7 @@ import app.models  # noqa: F401
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import event, pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -61,6 +61,12 @@ async def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    if connectable.url.get_backend_name() == "sqlite":
+        @event.listens_for(connectable.sync_engine, "connect")
+        def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
 
     async with connectable.connect() as async_connection:
         await async_connection.run_sync(do_run_migrations)

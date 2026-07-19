@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class AccountRealtimeEvent(TypedDict, total=False):
     type: Literal[
         "friendship_updated",
+        "friend_request_updated",
         "group_invite_updated",
         "group_updated",
         "profile_updated",
@@ -28,6 +29,10 @@ class AccountRealtimeEvent(TypedDict, total=False):
 
 def friendship_updated_event(*, reason: str) -> AccountRealtimeEvent:
     return {"type": "friendship_updated", "reason": reason}
+
+
+def friend_request_updated_event(*, reason: str) -> AccountRealtimeEvent:
+    return {"type": "friend_request_updated", "reason": reason}
 
 
 def profile_updated_event(*, user_id: UUID) -> AccountRealtimeEvent:

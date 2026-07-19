@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+import sqlalchemy as sa
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -16,6 +18,22 @@ from app.services.invitations import (
     new_invite_token,
     terminate_invite,
 )
+
+
+@dataclass(frozen=True)
+class FriendRequestCreationResult:
+    invite: FriendInvite | None
+    target_user_id: UUID | None
+    changed: bool
+
+
+@dataclass(frozen=True)
+class FriendRequestDecisionResult:
+    invite: FriendInvite
+    inviter_user_id: UUID
+    target_user_id: UUID
+    changed: bool
+    already_friends: bool
 
 
 def _make_code(length: int = 10) -> str:
@@ -82,6 +100,115 @@ async def create_friend_link_invite(
     raise RuntimeError("Failed to generate unique invite code")
 
 
+async def create_friend_request(
+    db: AsyncSession,
+    current_user_id: UUID,
+    email: str,
+    *,
+    ttl_days: int = 7,
+) -> FriendRequestCreationResult:
+    normalized_email = email.strip().casefold()
+    target = (
+        await db.execute(
+            select(User).where(sa.func.lower(User.email) == normalized_email)
+        )
+    ).scalar_one_or_none()
+
+    # Keep account lookup private: an unknown address behaves like a successful no-op.
+    if target is None:
+        return FriendRequestCreationResult(None, None, False)
+    if target.id == current_user_id:
+        raise ValueError("cannot_friend_self")
+
+    low, high = _pair(current_user_id, target.id)
+    friendship = (
+        await db.execute(
+            select(Friendship.id).where(
+                Friendship.user_low_id == low,
+                Friendship.user_high_id == high,
+            )
+        )
+    ).scalar_one_or_none()
+    if friendship is not None:
+        raise ValueError("already_friends")
+
+    now = datetime.now(timezone.utc)
+    pending = (
+        await db.execute(
+            select(FriendInvite.id).where(
+                FriendInvite.target_user_id.is_not(None),
+                FriendInvite.revoked_at.is_(None),
+                FriendInvite.expires_at > now,
+                FriendInvite.uses_count < FriendInvite.max_uses,
+                sa.or_(
+                    sa.and_(
+                        FriendInvite.created_by_user_id == current_user_id,
+                        FriendInvite.target_user_id == target.id,
+                    ),
+                    sa.and_(
+                        FriendInvite.created_by_user_id == target.id,
+                        FriendInvite.target_user_id == current_user_id,
+                    ),
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+    if pending is not None:
+        raise ValueError("request_already_pending")
+
+    expires_at = now + timedelta(days=ttl_days)
+    for _ in range(10):
+        code = _make_code()
+        code_exists = (
+            await db.execute(select(FriendInvite.id).where(FriendInvite.code == code))
+        ).scalar_one_or_none()
+        if code_exists is not None:
+            continue
+        invite = FriendInvite(
+            code=code,
+            created_by_user_id=current_user_id,
+            target_user_id=target.id,
+            expires_at=expires_at,
+            max_uses=1,
+            uses_count=0,
+        )
+        db.add(invite)
+        await db.flush()
+        return FriendRequestCreationResult(invite, target.id, True)
+
+    raise RuntimeError("Failed to generate unique friend request")
+
+
+async def list_friend_requests(
+    db: AsyncSession,
+    current_user_id: UUID,
+) -> tuple[list[tuple[FriendInvite, User]], list[tuple[FriendInvite, User]]]:
+    now = datetime.now(timezone.utc)
+    active = (
+        FriendInvite.target_user_id.is_not(None),
+        FriendInvite.revoked_at.is_(None),
+        FriendInvite.expires_at > now,
+        FriendInvite.uses_count < FriendInvite.max_uses,
+    )
+    incoming = (
+        await db.execute(
+            select(FriendInvite, User)
+            .join(User, User.id == FriendInvite.created_by_user_id)
+            .where(*active, FriendInvite.target_user_id == current_user_id)
+            .order_by(FriendInvite.created_at.desc())
+        )
+    ).all()
+    outgoing = (
+        await db.execute(
+            select(FriendInvite, User)
+            .join(User, User.id == FriendInvite.target_user_id)
+            .where(*active, FriendInvite.created_by_user_id == current_user_id)
+            .order_by(FriendInvite.created_at.desc())
+        )
+    ).all()
+    return list(incoming), list(outgoing)
+
+
 async def get_friend_invite_by_token(
     db: AsyncSession,
     token: str,
@@ -114,6 +241,8 @@ async def _accept_friend_invite_record(
     invite: FriendInvite,
 ) -> bool:
     ensure_invite_active(invite)
+    if invite.target_user_id is not None and invite.target_user_id != current_user_id:
+        raise PermissionError("This friend request belongs to another user")
     if invite.created_by_user_id == current_user_id:
         raise ValueError("cannot_friend_self")
 
@@ -134,6 +263,104 @@ async def _accept_friend_invite_record(
     invite.uses_count += 1
     await db.flush()
     return False
+
+
+async def decide_friend_request(
+    db: AsyncSession,
+    current_user_id: UUID,
+    invite_id: UUID,
+    decision: str,
+) -> FriendRequestDecisionResult:
+    invite = (
+        await db.execute(
+            select(FriendInvite)
+            .where(FriendInvite.id == invite_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if invite is None or invite.target_user_id is None:
+        raise ValueError("request_not_found")
+    if invite.target_user_id != current_user_id:
+        raise PermissionError("This friend request belongs to another user")
+
+    if decision == "accept":
+        low, high = _pair(invite.created_by_user_id, current_user_id)
+        existing = (
+            await db.execute(
+                select(Friendship.id).where(
+                    Friendship.user_low_id == low,
+                    Friendship.user_high_id == high,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            request_was_active = (
+                invite.revoked_at is None
+                and invite.expires_at > datetime.now(timezone.utc)
+                and invite.uses_count < invite.max_uses
+            )
+            if request_was_active:
+                terminate_invite(invite)
+                await db.flush()
+            return FriendRequestDecisionResult(
+                invite=invite,
+                inviter_user_id=invite.created_by_user_id,
+                target_user_id=current_user_id,
+                changed=request_was_active,
+                already_friends=True,
+            )
+
+    ensure_invite_active(invite)
+
+    if decision == "decline":
+        terminate_invite(invite)
+        await db.flush()
+        return FriendRequestDecisionResult(
+            invite=invite,
+            inviter_user_id=invite.created_by_user_id,
+            target_user_id=current_user_id,
+            changed=True,
+            already_friends=False,
+        )
+
+    already_friends = await _accept_friend_invite_record(
+        db, current_user_id, invite
+    )
+    return FriendRequestDecisionResult(
+        invite=invite,
+        inviter_user_id=invite.created_by_user_id,
+        target_user_id=current_user_id,
+        changed=not already_friends,
+        already_friends=already_friends,
+    )
+
+
+async def cancel_friend_request(
+    db: AsyncSession,
+    current_user_id: UUID,
+    invite_id: UUID,
+) -> FriendRequestDecisionResult:
+    invite = (
+        await db.execute(
+            select(FriendInvite)
+            .where(FriendInvite.id == invite_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if invite is None or invite.target_user_id is None:
+        raise ValueError("request_not_found")
+    if invite.created_by_user_id != current_user_id:
+        raise PermissionError("Only the sender can cancel this friend request")
+    ensure_invite_active(invite)
+    terminate_invite(invite)
+    await db.flush()
+    return FriendRequestDecisionResult(
+        invite=invite,
+        inviter_user_id=current_user_id,
+        target_user_id=invite.target_user_id,
+        changed=True,
+        already_friends=False,
+    )
 
 
 async def accept_friend_invite(

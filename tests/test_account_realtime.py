@@ -4,6 +4,7 @@ import pytest
 
 from app.services.account_realtime import (
     AccountRealtimeHub,
+    friend_request_updated_event,
     friendship_updated_event,
     group_invite_updated_event,
     group_updated_event,
@@ -49,6 +50,7 @@ def test_account_events_are_compact_and_contain_no_private_fields():
     group_id = uuid4()
     member_id = uuid4()
     events = [
+        friend_request_updated_event(reason="request_created"),
         friendship_updated_event(reason="friendship_removed"),
         group_invite_updated_event(
             reason="targeted_invite_created", group_id=group_id

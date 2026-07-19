@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from uuid import UUID
 
 from app.services.account_realtime import (
+    friend_request_updated_event,
     friendship_updated_event,
     group_invite_updated_event,
     group_updated_event,
@@ -18,6 +19,12 @@ async def publish_friendship_update(
     user_ids: Iterable[UUID], *, reason: str
 ) -> None:
     await notify_account_users(user_ids, friendship_updated_event(reason=reason))
+
+
+async def publish_friend_request_update(
+    user_ids: Iterable[UUID], *, reason: str
+) -> None:
+    await notify_account_users(user_ids, friend_request_updated_event(reason=reason))
 
 
 async def publish_profile_update(

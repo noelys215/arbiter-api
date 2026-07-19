@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import permission_error, value_error
-from app.api.presenters.users import public_user_from_user
+from app.api.presenters.users import invite_user_from_user, public_user_from_user
 from app.models.user import User
 from app.schemas.friends import (
     FriendInviteCreateResponse,
@@ -13,21 +13,193 @@ from app.schemas.friends import (
     FriendAcceptRequest,
     FriendAcceptResponse,
     FriendListItem,
+    FriendRequestCreate,
+    FriendRequestCreateResponse,
+    FriendRequestDecision,
+    FriendRequestDecisionResponse,
+    FriendRequestListItem,
+    FriendRequestListResponse,
     UnfriendRequest,
     UnfriendResponse,
 )
 from app.services.friends import (
     accept_friend_invite,
+    cancel_friend_request,
+    create_friend_request,
     create_friend_invite,
     create_friend_link_invite,
     list_friends,
+    list_friend_requests,
+    decide_friend_request,
     revoke_friend_invite,
     unfriend,
 )
-from app.services.social_realtime import publish_friendship_update
+from app.services.social_realtime import (
+    publish_friend_request_update,
+    publish_friendship_update,
+)
 from uuid import UUID
 
 router = APIRouter(prefix="/friends", tags=["friends"])
+
+
+@router.post(
+    "/requests",
+    response_model=FriendRequestCreateResponse,
+    status_code=201,
+)
+async def send_friend_request(
+    payload: FriendRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        result = await create_friend_request(db, user.id, str(payload.email))
+        await db.commit()
+        if result.changed and result.target_user_id is not None:
+            await publish_friend_request_update(
+                [user.id, result.target_user_id],
+                reason="request_created",
+            )
+        return FriendRequestCreateResponse(ok=True)
+    except ValueError as exc:
+        await db.rollback()
+        raise value_error(
+            exc,
+            code_statuses={
+                "cannot_friend_self": 400,
+                "already_friends": 409,
+                "request_already_pending": 409,
+            },
+            detail_overrides={
+                "cannot_friend_self": "You cannot send a friend request to yourself.",
+                "already_friends": "You are already friends.",
+                "request_already_pending": "A friend request is already pending between you.",
+            },
+            default_detail="Could not send friend request",
+        ) from exc
+
+
+@router.get("/requests", response_model=FriendRequestListResponse)
+async def get_friend_requests(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    incoming, outgoing = await list_friend_requests(db, user.id)
+    return FriendRequestListResponse(
+        incoming=[
+            FriendRequestListItem(
+                id=invite.id,
+                direction="incoming",
+                user=invite_user_from_user(other_user),
+                created_at=invite.created_at,
+                expires_at=invite.expires_at,
+            )
+            for invite, other_user in incoming
+        ],
+        outgoing=[
+            FriendRequestListItem(
+                id=invite.id,
+                direction="outgoing",
+                user=invite_user_from_user(other_user),
+                created_at=invite.created_at,
+                expires_at=invite.expires_at,
+            )
+            for invite, other_user in outgoing
+        ],
+    )
+
+
+@router.post(
+    "/requests/{request_id}/decision",
+    response_model=FriendRequestDecisionResponse,
+)
+async def decide_pending_friend_request(
+    request_id: UUID,
+    payload: FriendRequestDecision,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        result = await decide_friend_request(
+            db, user.id, request_id, payload.decision
+        )
+        await db.commit()
+        recipients = [result.inviter_user_id, result.target_user_id]
+        if result.changed:
+            await publish_friend_request_update(
+                recipients,
+                reason=(
+                    "request_accepted"
+                    if payload.decision == "accept"
+                    else "request_declined"
+                ),
+            )
+        if (
+            payload.decision == "accept"
+            and result.changed
+            and not result.already_friends
+        ):
+            await publish_friendship_update(
+                recipients,
+                reason="friendship_created",
+            )
+        return FriendRequestDecisionResponse(
+            ok=True,
+            decision=(
+                "accepted" if payload.decision == "accept" else "declined"
+            ),
+            already_friends=result.already_friends,
+        )
+    except PermissionError as exc:
+        await db.rollback()
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise value_error(
+            exc,
+            code_statuses={
+                "request_not_found": 404,
+                "expired_invite": 410,
+                "revoked_invite": 410,
+                "used_invite": 409,
+            },
+            default_detail="Could not update friend request",
+        ) from exc
+
+
+@router.delete(
+    "/requests/{request_id}",
+    response_model=FriendRequestDecisionResponse,
+)
+async def cancel_pending_friend_request(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        result = await cancel_friend_request(db, user.id, request_id)
+        await db.commit()
+        await publish_friend_request_update(
+            [result.inviter_user_id, result.target_user_id],
+            reason="request_cancelled",
+        )
+        return FriendRequestDecisionResponse(ok=True, decision="cancelled")
+    except PermissionError as exc:
+        await db.rollback()
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise value_error(
+            exc,
+            code_statuses={
+                "request_not_found": 404,
+                "expired_invite": 410,
+                "revoked_invite": 410,
+                "used_invite": 409,
+            },
+            default_detail="Could not cancel friend request",
+        ) from exc
 
 
 @router.post("/invite", response_model=FriendInviteCreateResponse, status_code=201)
