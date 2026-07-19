@@ -49,17 +49,19 @@ def act_as_token(client, token: str | None):
         client.cookies.set("access_token", token)
 
 
-async def create_friendship(client, *, token_a: str, token_b: str) -> None:
-    # A creates invite code
+async def create_friendship(
+    client, *, token_a: str, token_b: str, recipient_email: str
+) -> None:
     act_as_token(client, token_a)
-    r = await client.post("/friends/invite")
-    assert r.status_code in (200, 201), r.text
-    code = r.json()["code"]
-    assert code
+    r = await client.post("/friends/requests", json={"email": recipient_email})
+    assert r.status_code == 201, r.text
+    request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
 
-    # B accepts
     act_as_token(client, token_b)
-    r = await client.post("/friends/accept", json={"code": code})
+    r = await client.post(
+        f"/friends/requests/{request_id}/decision",
+        json={"decision": "accept"},
+    )
     assert r.status_code == 200, r.text
     assert r.json().get("ok") is True
 
@@ -76,18 +78,24 @@ async def create_group(client, *, token_owner: str, name: str, member_user_ids: 
     return data["id"]
 
 
-async def get_group_invite_code(client, *, token_owner: str, group_id: str) -> str:
+async def create_group_invitation(
+    client, *, token_owner: str, group_id: str, target_user_id: str
+) -> str:
     act_as_token(client, token_owner)
-    r = await client.post(f"/groups/{group_id}/invite")
-    assert r.status_code in (200, 201), r.text
-    code = r.json()["code"]
-    assert code
-    return code
+    r = await client.post(
+        f"/groups/{group_id}/invites",
+        json={"target_user_id": target_user_id},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
 
 
-async def accept_group_invite(client, *, token_user: str, code: str) -> None:
+async def accept_group_invitation(client, *, token_user: str, invite_id: str) -> None:
     act_as_token(client, token_user)
-    r = await client.post("/groups/accept-invite", json={"code": code})
+    r = await client.post(
+        f"/group-invites/{invite_id}/decision",
+        json={"decision": "accept"},
+    )
     assert r.status_code == 200, r.text
     assert r.json().get("ok") is True
 
@@ -113,7 +121,9 @@ async def test_groups_full_flow_owner_member_invite_accept(client):
     token_c = await login_and_get_token(client, email=c_email, password=password)
 
     # A + B must be friends to create a group containing B
-    await create_friendship(client, token_a=token_a, token_b=token_b)
+    await create_friendship(
+        client, token_a=token_a, token_b=token_b, recipient_email=b_email
+    )
 
     # A creates group with B as initial member
     group_id = await create_group(client, token_owner=token_a, name="Movie Night", member_user_ids=[b_id])
@@ -143,11 +153,16 @@ async def test_groups_full_flow_owner_member_invite_accept(client):
     assert a_id in member_ids
     assert b_id in member_ids
 
-    # Owner generates invite code
-    invite_code = await get_group_invite_code(client, token_owner=token_a, group_id=group_id)
-
-    # C joins via invite code
-    await accept_group_invite(client, token_user=token_c, code=invite_code)
+    await create_friendship(
+        client, token_a=token_a, token_b=token_c, recipient_email=c_email
+    )
+    invite_id = await create_group_invitation(
+        client,
+        token_owner=token_a,
+        group_id=group_id,
+        target_user_id=c_id,
+    )
+    await accept_group_invitation(client, token_user=token_c, invite_id=invite_id)
 
     # C should now see the group
     act_as_token(client, token_c)
@@ -176,7 +191,7 @@ async def test_group_detail_requires_membership(client):
     b_username = _u("userb")
     x_username = _u("userx")
 
-    a_id = await register_user(client, email=a_email, username=a_username, display_name="A", password=password)
+    _ = await register_user(client, email=a_email, username=a_username, display_name="A", password=password)
     b_id = await register_user(client, email=b_email, username=b_username, display_name="B", password=password)
     _ = await register_user(client, email=x_email, username=x_username, display_name="X", password=password)
 
@@ -185,7 +200,9 @@ async def test_group_detail_requires_membership(client):
     token_x = await login_and_get_token(client, email=x_email, password=password)
 
     # A + B are friends so A can create group with B
-    await create_friendship(client, token_a=token_a, token_b=token_b)
+    await create_friendship(
+        client, token_a=token_a, token_b=token_b, recipient_email=b_email
+    )
 
     group_id = await create_group(client, token_owner=token_a, name="Private Group", member_user_ids=[b_id])
 
@@ -196,7 +213,7 @@ async def test_group_detail_requires_membership(client):
     assert r.status_code in (401, 403, 404), r.text
 
 
-async def test_only_owner_can_generate_group_invite(client):
+async def test_only_owner_can_create_group_invitation(client):
     password = "SuperSecret123"
 
     a_email = f"{_u('a')}@example.com"
@@ -211,29 +228,20 @@ async def test_only_owner_can_generate_group_invite(client):
     token_a = await login_and_get_token(client, email=a_email, password=password)
     token_b = await login_and_get_token(client, email=b_email, password=password)
 
-    await create_friendship(client, token_a=token_a, token_b=token_b)
+    await create_friendship(
+        client, token_a=token_a, token_b=token_b, recipient_email=b_email
+    )
 
     group_id = await create_group(client, token_owner=token_a, name="Owner Only Invites", member_user_ids=[b_id])
 
     # B is a member but not owner; should be blocked from invite generation
     act_as_token(client, token_b)
-    r = await client.post(f"/groups/{group_id}/invite")
+    r = await client.post(
+        f"/groups/{group_id}/invites",
+        json={"target_user_id": a_id},
+    )
 
     assert r.status_code in (401, 403), r.text
-
-
-async def test_accept_group_invite_invalid_code_returns_400(client):
-    password = "SuperSecret123"
-
-    c_email = f"{_u('c')}@example.com"
-    c_username = _u("userc")
-
-    _ = await register_user(client, email=c_email, username=c_username, display_name="C", password=password)
-    token_c = await login_and_get_token(client, email=c_email, password=password)
-
-    act_as_token(client, token_c)
-    r = await client.post("/groups/accept-invite", json={"code": "NOT_A_REAL_CODE"})
-    assert r.status_code in (400, 404), r.text
 
 
 async def test_only_owner_can_rename_group(

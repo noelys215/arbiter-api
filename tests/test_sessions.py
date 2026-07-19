@@ -2,6 +2,12 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
+from social_helpers import (
+    add_friend_to_group_with_tokens,
+    create_friendship,
+    create_friendship_with_tokens,
+)
+
 
 @pytest.mark.anyio
 async def test_create_session_requires_membership(async_client, user_factory, login_helper):
@@ -42,19 +48,33 @@ async def test_group_leader_can_set_watch_party_link_and_members_can_read(
     )
 
     leader = await user_factory(async_client, display_name="Leader")
-    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    leader_token = await login_helper(
+        async_client, email=leader["email"], password=leader["password"]
+    )
     group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
     group_id = group["id"]
 
-    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
-    code = invite["code"]
-
     member = await user_factory(async_client, display_name="Member")
-    await login_helper(async_client, email=member["email"], password=member["password"])
-    accept = await async_client.post("/groups/accept-invite", json={"code": code})
-    assert accept.status_code == 200, accept.text
+    member_token = await login_helper(
+        async_client, email=member["email"], password=member["password"]
+    )
+    await create_friendship_with_tokens(
+        async_client,
+        sender_token=leader_token,
+        recipient_token=member_token,
+        recipient_email=member["email"],
+    )
+    await add_friend_to_group_with_tokens(
+        async_client,
+        owner_token=leader_token,
+        recipient_token=member_token,
+        group_id=group_id,
+        target_user_id=member["id"],
+    )
 
-    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    leader_token = await login_helper(
+        async_client, email=leader["email"], password=leader["password"]
+    )
     for tmdb_id, title in ((101, "A"), (102, "B")):
         add = await async_client.post(
             f"/groups/{group_id}/watchlist",
@@ -118,19 +138,33 @@ async def test_non_leader_cannot_set_watch_party_link(
     login_helper,
 ):
     leader = await user_factory(async_client, display_name="Leader")
-    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    leader_token = await login_helper(
+        async_client, email=leader["email"], password=leader["password"]
+    )
     group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
     group_id = group["id"]
 
-    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
-    code = invite["code"]
-
     member = await user_factory(async_client, display_name="Member")
-    await login_helper(async_client, email=member["email"], password=member["password"])
-    accept = await async_client.post("/groups/accept-invite", json={"code": code})
-    assert accept.status_code == 200, accept.text
+    member_token = await login_helper(
+        async_client, email=member["email"], password=member["password"]
+    )
+    await create_friendship_with_tokens(
+        async_client,
+        sender_token=leader_token,
+        recipient_token=member_token,
+        recipient_email=member["email"],
+    )
+    await add_friend_to_group_with_tokens(
+        async_client,
+        owner_token=leader_token,
+        recipient_token=member_token,
+        group_id=group_id,
+        target_user_id=member["id"],
+    )
 
-    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    leader_token = await login_helper(
+        async_client, email=leader["email"], password=leader["password"]
+    )
     for tmdb_id, title in ((103, "C"), (104, "D")):
         add = await async_client.post(
             f"/groups/{group_id}/watchlist",
@@ -186,17 +220,29 @@ async def test_group_leader_can_set_non_join_teleparty_link(
     login_helper,
 ):
     leader = await user_factory(async_client, display_name="Leader")
-    await login_helper(async_client, email=leader["email"], password=leader["password"])
+    leader_token = await login_helper(
+        async_client, email=leader["email"], password=leader["password"]
+    )
     group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
     group_id = group["id"]
 
-    invite = (await async_client.post(f"/groups/{group_id}/invite")).json()
-    code = invite["code"]
-
     member = await user_factory(async_client, display_name="Member")
-    await login_helper(async_client, email=member["email"], password=member["password"])
-    accept = await async_client.post("/groups/accept-invite", json={"code": code})
-    assert accept.status_code == 200, accept.text
+    member_token = await login_helper(
+        async_client, email=member["email"], password=member["password"]
+    )
+    await create_friendship_with_tokens(
+        async_client,
+        sender_token=leader_token,
+        recipient_token=member_token,
+        recipient_email=member["email"],
+    )
+    await add_friend_to_group_with_tokens(
+        async_client,
+        owner_token=leader_token,
+        recipient_token=member_token,
+        group_id=group_id,
+        target_user_id=member["id"],
+    )
 
     await login_helper(async_client, email=leader["email"], password=leader["password"])
     for tmdb_id, title in ((105, "E"), (106, "F")):
@@ -1348,8 +1394,11 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client,
+            client_b,
+            recipient_email=user_b["email"],
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
@@ -1415,8 +1464,11 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client,
+            client_b,
+            recipient_email=user_b["email"],
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 

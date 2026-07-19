@@ -46,11 +46,8 @@ async def get_group_invitations(
                 group_id=group.id,
                 group_name=group.name,
                 inviter=invite_user_from_user(inviter),
-                target=invite_user_from_user(target) if target else None,
+                target=invite_user_from_user(target),
                 expires_at=invite.expires_at,
-                max_uses=invite.max_uses,
-                uses_count=invite.uses_count,
-                targeted=invite.target_user_id is not None,
             )
             for invite, group, inviter, target in rows
         ]
@@ -88,8 +85,7 @@ async def decide_group_invite(
                 user.id,
                 result.created_by_user_id,
             }
-            if result.target_user_id is not None:
-                invite_recipients.add(result.target_user_id)
+            invite_recipients.add(result.target_user_id)
             await publish_group_invite_update(
                 invite_recipients,
                 reason=(
@@ -143,8 +139,7 @@ async def revoke_group_invite(
         await db.commit()
         if changed:
             recipients = {user.id, invite.created_by_user_id}
-            if invite.target_user_id is not None:
-                recipients.add(invite.target_user_id)
+            recipients.add(invite.target_user_id)
             await publish_group_invite_update(
                 recipients,
                 reason="invite_revoked",

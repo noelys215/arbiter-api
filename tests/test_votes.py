@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import json
 import pytest
+
+from social_helpers import create_friendship
 from sqlalchemy import select
 
 from app.db.session import AsyncSessionLocal
@@ -133,11 +135,12 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
         await login_helper(client_c, email=user_c["email"], password=user_c["password"])
 
         # back to A
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
-
-        invite_c = (await async_client.post("/friends/invite")).json()["code"]
-        await client_c.post("/friends/accept", json={"code": invite_c})
+        await create_friendship(
+            async_client, client_b, recipient_email=user_b["email"]
+        )
+        await create_friendship(
+            async_client, client_c, recipient_email=user_c["email"]
+        )
 
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
@@ -272,8 +275,9 @@ async def test_collecting_waits_then_transitions_to_swiping(
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client, client_b, recipient_email=user_b["email"]
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
@@ -331,8 +335,9 @@ async def test_timer_lock_prevents_late_vote(async_client, client_factory, user_
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client, client_b, recipient_email=user_b["email"]
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
@@ -405,8 +410,9 @@ async def test_group_leader_can_end_session(async_client, client_factory, user_f
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client, client_b, recipient_email=user_b["email"]
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
@@ -450,8 +456,9 @@ async def test_group_leader_end_marks_completed_session_ended_for_members(
         user_b = await user_factory(client_b, display_name="B")
         await login_helper(client_b, email=user_b["email"], password=user_b["password"])
 
-        invite_b = (await async_client.post("/friends/invite")).json()["code"]
-        await client_b.post("/friends/accept", json={"code": invite_b})
+        await create_friendship(
+            async_client, client_b, recipient_email=user_b["email"]
+        )
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 

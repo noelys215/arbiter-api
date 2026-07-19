@@ -4,6 +4,8 @@ from uuid import UUID
 
 import pytest
 
+from social_helpers import create_friendship
+
 pytestmark = pytest.mark.anyio
 
 
@@ -20,40 +22,6 @@ async def _two_users(client, client_factory, user_factory, login_helper):
     return user_a, user_b, token_b
 
 
-async def test_friendship_event_emits_once_to_both_users_after_creation(
-    client,
-    client_factory,
-    user_factory,
-    login_helper,
-    monkeypatch,
-):
-    from app.api.routes import invites as invite_routes
-
-    user_a, user_b, token_b = await _two_users(
-        client, client_factory, user_factory, login_helper
-    )
-    token = (await client.post("/friends/invites")).json()["token"]
-    events: list[tuple[set[UUID], str]] = []
-
-    async def record(user_ids, *, reason: str):
-        events.append((set(user_ids), reason))
-
-    monkeypatch.setattr(invite_routes, "publish_friendship_update", record)
-    async with client_factory() as client_b:
-        client_b.cookies.set("access_token", token_b)
-        first = await client_b.post(f"/invites/friend/{token}/accept")
-        second = await client_b.post(f"/invites/friend/{token}/accept")
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert events == [
-        (
-            {UUID(user_a["id"]), UUID(user_b["id"])},
-            "friendship_created",
-        )
-    ]
-
-
 async def test_targeted_group_invite_and_acceptance_emit_compact_updates(
     client,
     client_factory,
@@ -67,10 +35,13 @@ async def test_targeted_group_invite_and_acceptance_emit_compact_updates(
     user_a, user_b, token_b = await _two_users(
         client, client_factory, user_factory, login_helper
     )
-    friend_token = (await client.post("/friends/invites")).json()["token"]
     async with client_factory() as client_b:
         client_b.cookies.set("access_token", token_b)
-        await client_b.post(f"/invites/friend/{friend_token}/accept")
+        await create_friendship(
+            client,
+            client_b,
+            recipient_email=user_b["email"],
+        )
 
     group_id = (
         await client.post("/groups", json={"name": "Realtime Club"})
@@ -93,7 +64,7 @@ async def test_targeted_group_invite_and_acceptance_emit_compact_updates(
     monkeypatch.setattr(group_routes, "publish_group_invite_update", record_invite)
     created = await client.post(
         f"/groups/{group_id}/invites",
-        json={"target_user_id": user_b["id"], "max_uses": 1},
+        json={"target_user_id": user_b["id"]},
     )
     invite_id = created.json()["id"]
     assert invite_events[-1][1] == "targeted_invite_created"

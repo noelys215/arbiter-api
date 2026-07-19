@@ -14,14 +14,11 @@ class FriendInvite(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    code: Mapped[str] = mapped_column(sa.String(16), nullable=False, unique=True, index=True)
-    token_hash: Mapped[str | None] = mapped_column(sa.String(64), nullable=True, unique=True, index=True)
-
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False, index=True)
-    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
+    target_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
 

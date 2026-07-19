@@ -44,7 +44,6 @@ class LocalAuthBypassRequest(BaseModel):
 
 class MagicLinkRequest(BaseModel):
     email: EmailStr
-    return_to: str | None = Field(default=None, max_length=160)
 
 
 class MagicLinkRequestResponse(BaseModel):

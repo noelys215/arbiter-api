@@ -133,13 +133,15 @@ Auth cookie is required for all protected routes (`/friends`, `/groups`, `/watch
 
 ### Friends
 
-Friendship is required before inviting someone to a group.
+Friendships are account-level and independent of groups.
 
-1) User A generates invite: `POST /friends/invite`
-2) User B accepts code: `POST /friends/accept`
+1) User A sends a request to an existing account: `POST /friends/requests`
+2) User B accepts it: `POST /friends/requests/{request_id}/decision`
 3) Both can list friends: `GET /friends`
 
-Invite codes are one-time use and expire after TTL.
+Requests are targeted, expire after their TTL, and are delivered through the
+authenticated account inbox and WebSocket updates. Arbiter does not issue
+public friendship links or codes.
 
 ### Groups
 
@@ -151,10 +153,10 @@ Groups are owned by a user and have members. Creation requires all added members
   - List all groups the user belongs to.
 - `GET /groups/{group_id}`
   - Detail with member list.
-- `POST /groups/{group_id}/invite`
-  - Owner-only invite code.
-- `POST /groups/accept-invite`
-  - Join group by code.
+- `POST /groups/{group_id}/invites`
+  - Owner sends a targeted invitation to an existing friend.
+- `POST /group-invites/{invite_id}/decision`
+  - Target account explicitly accepts or declines the invitation.
 
 ### Watchlist
 
@@ -388,7 +390,7 @@ sequenceDiagram
   API-->>Client: 200 user profile
 ```
 
-### Friend invite and accept
+### Friend request and accept
 
 ```mermaid
 sequenceDiagram
@@ -397,13 +399,12 @@ sequenceDiagram
   participant API
   participant DB
 
-  A->>API: POST /friends/invite
-  API->>DB: INSERT friend_invite
-  DB-->>API: code
-  API-->>A: 201 {code}
+  A->>API: POST /friends/requests {email}
+  API->>DB: INSERT targeted friend request
+  API-->>A: 201 {ok:true}
 
-  B->>API: POST /friends/accept {code}
-  API->>DB: SELECT invite (lock)
+  B->>API: POST /friends/requests/{id}/decision {accept}
+  API->>DB: SELECT request (lock)
   API->>DB: INSERT friendship (if new)
   API->>DB: UPDATE invite uses_count
   API-->>B: 200 {ok:true}
@@ -423,11 +424,11 @@ sequenceDiagram
   API->>DB: INSERT group + memberships
   API-->>Owner: 201 group
 
-  Owner->>API: POST /groups/{id}/invite
-  API->>DB: INSERT group_invite
-  API-->>Owner: 201 {code}
+  Owner->>API: POST /groups/{id}/invites {target_user_id}
+  API->>DB: INSERT targeted group invitation
+  API-->>Owner: 201 invitation
 
-  Member->>API: POST /groups/accept-invite {code}
+  Member->>API: POST /group-invites/{id}/decision {accept}
   API->>DB: INSERT membership
   API-->>Member: 200 {ok:true}
 ```
@@ -476,13 +477,15 @@ curl -i -b cookies.txt http://127.0.0.1:8000/me
 ### Friends + group
 
 ```bash
-# A creates invite
-curl -i -b cookies.txt -X POST http://127.0.0.1:8000/friends/invite
-
-# B accepts invite (use B's cookie jar)
-curl -i -b cookies_b.txt -X POST http://127.0.0.1:8000/friends/accept \
+# A sends a request to B's account
+curl -i -b cookies.txt -X POST http://127.0.0.1:8000/friends/requests \
   -H 'Content-Type: application/json' \
-  -d '{"code":"<INVITE_CODE>"}'
+  -d '{"email":"b@example.com"}'
+
+# B accepts the request from the account inbox
+curl -i -b cookies_b.txt -X POST http://127.0.0.1:8000/friends/requests/<REQUEST_ID>/decision \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"accept"}'
 
 # A creates group with B
 curl -i -b cookies.txt -X POST http://127.0.0.1:8000/groups \
@@ -533,8 +536,10 @@ curl -i -H 'Accept: application/json' -H 'Content-Type: application/json' \
 
 ### Friends
 
-- `POST /friends/invite` -> `{code, expires_at}`
-- `POST /friends/accept` -> `{ok:true}`
+- `POST /friends/requests` -> `{ok:true}`
+- `GET /friends/requests` -> incoming and outgoing requests
+- `POST /friends/requests/{request_id}/decision` -> accept or decline
+- `DELETE /friends/requests/{request_id}` -> cancel an outgoing request
 - `GET /friends` -> list friends
 
 ### Groups
@@ -542,8 +547,11 @@ curl -i -H 'Accept: application/json' -H 'Content-Type: application/json' \
 - `POST /groups` -> group list item
 - `GET /groups` -> list groups
 - `GET /groups/{group_id}` -> group detail + members
-- `POST /groups/{group_id}/invite` -> `{code, expires_at, max_uses, uses_count}`
-- `POST /groups/accept-invite` -> `{ok:true}`
+- `POST /groups/{group_id}/invites` -> targeted invitation
+- `GET /group-invites` -> incoming invitations
+- `GET /group-invites?group_id={group_id}` -> owner-visible outgoing invitations
+- `POST /group-invites/{invite_id}/decision` -> accept or decline
+- `DELETE /group-invites/{invite_id}` -> revoke
 
 ### Watchlist
 

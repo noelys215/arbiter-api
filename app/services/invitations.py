@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import secrets
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -9,15 +7,6 @@ from typing import Protocol
 class InvitationRecord(Protocol):
     expires_at: datetime
     revoked_at: datetime | None
-
-
-def new_invite_token() -> tuple[str, str]:
-    token = secrets.token_urlsafe(32)
-    return token, hash_invite_token(token)
-
-
-def hash_invite_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def ensure_invite_active(invite: InvitationRecord) -> None:

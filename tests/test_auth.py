@@ -183,41 +183,15 @@ async def test_magic_link_verify_creates_user_and_authenticates(client):
     token = create_magic_link_token("new.magic@example.com")
     response = await client.get(f"/auth/magic-link/verify?token={token}", follow_redirects=False)
     assert response.status_code == 302
+    assert response.headers["location"] == (
+        "http://localhost:5173/app?auth=magic-link"
+    )
 
     me = await client.get("/me")
     assert me.status_code == 200, me.text
     data = me.json()
     assert data["email"] == "new.magic@example.com"
     assert data["username"]
-
-
-async def test_magic_link_returns_to_validated_invite_preview(client):
-    from app.core.security import create_magic_link_token
-
-    return_to = f"/invite/friend/{'a' * 43}"
-    token = create_magic_link_token("invite.magic@example.com", return_to)
-    response = await client.get(
-        f"/auth/magic-link/verify?token={token}", follow_redirects=False
-    )
-    assert response.status_code == 302
-    assert response.headers["location"] == (
-        f"http://localhost:5173{return_to}?auth=magic-link"
-    )
-
-
-async def test_magic_link_request_rejects_unsafe_return_path(client, monkeypatch):
-    from app.api.routes import auth as auth_routes
-
-    monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
-    monkeypatch.setattr(auth_routes.settings, "resend_from_email", "test@example.com")
-    response = await client.post(
-        "/auth/magic-link/request",
-        json={
-            "email": "magic@example.com",
-            "return_to": "//evil.example/invite/friend/token",
-        },
-    )
-    assert response.status_code == 400
 
 
 async def test_magic_link_verify_rejects_invalid_token(client):

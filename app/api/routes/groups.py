@@ -13,10 +13,8 @@ from app.schemas.groups import (
     UpdateGroupRequest,
     GroupListItem,
     GroupDetailResponse,
-    GroupInviteResponse,
     CreateGroupInviteRequest,
-    GroupLinkInviteResponse,
-    AcceptGroupInviteRequest,
+    GroupInviteCreateResponse,
     LeaveGroupResponse,
     DeleteGroupResponse,
     AddGroupMembersRequest,
@@ -26,9 +24,7 @@ from app.services.groups import (
     create_group,
     list_groups_for_user,
     get_group_detail,
-    create_group_invite,
-    create_group_link_invite,
-    accept_group_invite,
+    create_group_invitation,
     leave_group,
     delete_group,
     add_group_members,
@@ -140,61 +136,35 @@ async def update_group_route(
         ) from e
 
 
-@router.post("/{group_id}/invite", response_model=GroupInviteResponse, status_code=201)
-async def create_group_invite_route(
-    group_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    try:
-        inv = await create_group_invite(db, group_id, user.id, ttl_minutes=60)
-        await db.commit()
-        return GroupInviteResponse(
-            code=inv.code,
-            expires_at=inv.expires_at,
-            max_uses=inv.max_uses,
-            uses_count=inv.uses_count,
-        )
-    except PermissionError as e:
-        await db.rollback()
-        raise permission_error(e) from e
-
-
 @router.post(
     "/{group_id}/invites",
-    response_model=GroupLinkInviteResponse,
+    response_model=GroupInviteCreateResponse,
     status_code=201,
 )
-async def create_group_link_invite_route(
+async def create_group_invitation_route(
     group_id: UUID,
     payload: CreateGroupInviteRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
-        invite, token = await create_group_link_invite(
+        invite = await create_group_invitation(
             db,
             group_id=group_id,
             creator_id=user.id,
             target_user_id=payload.target_user_id,
-            max_uses=payload.max_uses,
         )
         await db.commit()
-        if invite.target_user_id is not None:
-            await publish_group_invite_update(
-                [user.id, invite.target_user_id],
-                reason="targeted_invite_created",
-                group_id=group_id,
-            )
-        return GroupLinkInviteResponse(
+        await publish_group_invite_update(
+            [user.id, invite.target_user_id],
+            reason="targeted_invite_created",
+            group_id=group_id,
+        )
+        return GroupInviteCreateResponse(
             id=invite.id,
-            token=token,
-            code=invite.code,
             group_id=invite.group_id,
             target_user_id=invite.target_user_id,
             expires_at=invite.expires_at,
-            max_uses=invite.max_uses,
-            uses_count=invite.uses_count,
         )
     except PermissionError as exc:
         await db.rollback()
@@ -211,46 +181,6 @@ async def create_group_link_invite_route(
             },
             default_detail="Could not create invitation",
         ) from exc
-
-
-@router.post("/accept-invite", status_code=200)
-async def accept_group_invite_route(
-    payload: AcceptGroupInviteRequest,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    try:
-        result = await accept_group_invite(db, user.id, payload.code)
-        member_ids = (
-            await list_group_member_ids(db, result.group_id)
-            if result.changed
-            else []
-        )
-        await db.commit()
-        if result.changed:
-            await publish_group_invite_update(
-                [user.id, result.created_by_user_id],
-                reason="invite_accepted",
-                group_id=result.group_id,
-            )
-            await publish_group_update(
-                member_ids,
-                reason="membership_created",
-                group_id=result.group_id,
-                member_user_id=user.id,
-            )
-        return {"ok": True}
-    except ValueError as e:
-        await db.rollback()
-        raise value_error(
-            e,
-            code_statuses={
-                "invalid_invite": 404,
-                "expired_invite": 410,
-                "revoked_invite": 410,
-                "used_invite": 409,
-            },
-        ) from e
 
 
 @router.post("/{group_id}/leave", response_model=LeaveGroupResponse, status_code=200)

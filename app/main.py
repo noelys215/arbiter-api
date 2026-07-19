@@ -12,7 +12,6 @@ except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
     SessionMiddleware = None
 
 from app.core.config import settings
-from app.core.logging import configure_sensitive_path_redaction, redact_invite_tokens
 from app.api.routes.health import router as health_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.me import router as me_router
@@ -28,7 +27,6 @@ from app.api.routes.tmdb import router as tmdb_router
 from app.api.routes.watchlist import router as watchlist_router
 
 from app.api.routes.sessions import router as sessions_router
-from app.api.routes.invites import router as invites_router
 from app.api.routes.group_invites import router as group_invites_router
 from app.api.routes.realtime import router as realtime_router
 from app.api.routes.feedback import router as feedback_router
@@ -37,7 +35,6 @@ from app.services.feedback_rate_limit import close_feedback_rate_limiter
 
 
 logger = logging.getLogger(__name__)
-configure_sensitive_path_redaction()
 app = FastAPI(title="Watch Picker API", version="0.1.0")
 
 local_cors_origin_regex = (
@@ -56,7 +53,7 @@ async def debug_exception_handler(request: Request, exc: Exception):
     logger.exception(
         "Unhandled exception for %s %s",
         request.method,
-        redact_invite_tokens(request.url.path),
+        request.url.path,
     )
     return PlainTextResponse("Internal Server Error", status_code=500)
 
@@ -83,7 +80,6 @@ app.add_middleware(
 )
 
 app.include_router(friends_router)
-app.include_router(invites_router)
 app.include_router(group_invites_router)
 app.include_router(realtime_router)
 app.include_router(feedback_router)

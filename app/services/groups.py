@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from uuid import UUID
@@ -14,12 +13,7 @@ from app.models.group_membership import GroupMembership
 from app.models.group_invite import GroupInvite
 from app.models.friendship import Friendship
 from app.models.user import User
-from app.services.invitations import (
-    ensure_invite_active,
-    hash_invite_token,
-    new_invite_token,
-    terminate_invite,
-)
+from app.services.invitations import ensure_invite_active, terminate_invite
 
 
 @dataclass(frozen=True)
@@ -28,16 +22,11 @@ class GroupInviteMutationResult:
     changed: bool
     group_id: UUID
     created_by_user_id: UUID
-    target_user_id: UUID | None
+    target_user_id: UUID
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _short_code(nbytes: int = 8) -> str:
-    # ~11 chars for 8 bytes; URL-safe
-    return secrets.token_urlsafe(nbytes)[:12]
 
 
 async def _is_friend(db: AsyncSession, a: UUID, b: UUID) -> bool:
@@ -164,43 +153,14 @@ async def update_group_name(
     return group
 
 
-async def create_group_invite(db: AsyncSession, group_id: UUID, creator_id: UUID, ttl_minutes: int = 60) -> GroupInvite:
-    # owner-only
-    g = (await db.execute(sa.select(Group).where(Group.id == group_id))).scalar_one()
-    if g.owner_id != creator_id:
-        raise PermissionError("Only the group owner can create invite codes")
-
-    expires_at = _now_utc() + timedelta(minutes=ttl_minutes)
-
-    # generate unique code with a few attempts
-    for _ in range(10):
-        code = _short_code()
-        existing = (await db.execute(sa.select(GroupInvite.id).where(GroupInvite.code == code))).scalar_one_or_none()
-        if existing is None:
-            invite = GroupInvite(
-                code=code,
-                group_id=group_id,
-                created_by_user_id=creator_id,
-                expires_at=expires_at,
-                max_uses=1,
-                uses_count=0,
-            )
-            db.add(invite)
-            await db.flush()
-            return invite
-
-    raise RuntimeError("Failed to generate unique invite code")
-
-
-async def create_group_link_invite(
+async def create_group_invitation(
     db: AsyncSession,
     *,
     group_id: UUID,
     creator_id: UUID,
-    target_user_id: UUID | None,
-    max_uses: int,
+    target_user_id: UUID,
     ttl_days: int = 7,
-) -> tuple[GroupInvite, str]:
+) -> GroupInvite:
     group = (
         await db.execute(sa.select(Group).where(Group.id == group_id))
     ).scalar_one_or_none()
@@ -209,101 +169,46 @@ async def create_group_link_invite(
     if group.owner_id != creator_id:
         raise PermissionError("Only the group owner can create invitations")
 
-    if target_user_id is not None:
-        if target_user_id == creator_id:
-            raise ValueError("already_member")
-        if not await _is_friend(db, creator_id, target_user_id):
-            raise ValueError("target_not_friend")
-        membership = (
-            await db.execute(
-                sa.select(GroupMembership.id).where(
-                    GroupMembership.group_id == group_id,
-                    GroupMembership.user_id == target_user_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if membership is not None:
-            raise ValueError("already_member")
-
-        pending = (
-            await db.execute(
-                sa.select(GroupInvite.id).where(
-                    GroupInvite.group_id == group_id,
-                    GroupInvite.target_user_id == target_user_id,
-                    GroupInvite.revoked_at.is_(None),
-                    GroupInvite.expires_at > _now_utc(),
-                    GroupInvite.uses_count < GroupInvite.max_uses,
-                )
-            )
-        ).scalar_one_or_none()
-        if pending is not None:
-            raise ValueError("invite_already_pending")
-        max_uses = 1
-
-    token, token_hash = new_invite_token()
-    expires_at = _now_utc() + timedelta(days=ttl_days)
-    for _ in range(10):
-        code = _short_code()
-        code_exists = (
-            await db.execute(sa.select(GroupInvite.id).where(GroupInvite.code == code))
-        ).scalar_one_or_none()
-        if code_exists is not None:
-            continue
-        invite = GroupInvite(
-            code=code,
-            token_hash=token_hash,
-            group_id=group_id,
-            created_by_user_id=creator_id,
-            target_user_id=target_user_id,
-            expires_at=expires_at,
-            max_uses=max_uses,
-            uses_count=0,
-        )
-        db.add(invite)
-        await db.flush()
-        return invite, token
-    raise RuntimeError("Failed to generate unique invite code")
-
-
-async def get_group_invite_by_token(
-    db: AsyncSession,
-    token: str,
-    *,
-    lock: bool = False,
-) -> GroupInvite:
-    query = sa.select(GroupInvite).where(
-        GroupInvite.token_hash == hash_invite_token(token)
-    )
-    if lock:
-        query = query.with_for_update()
-    invite = (await db.execute(query)).scalar_one_or_none()
-    if invite is None:
-        raise ValueError("invalid_invite")
-    ensure_invite_active(invite)
-    return invite
-
-
-async def preview_group_invite(
-    db: AsyncSession,
-    token: str,
-) -> tuple[GroupInvite, Group, User, int]:
-    invite = await get_group_invite_by_token(db, token)
-    row = (
+    if target_user_id == creator_id:
+        raise ValueError("already_member")
+    if not await _is_friend(db, creator_id, target_user_id):
+        raise ValueError("target_not_friend")
+    membership = (
         await db.execute(
-            sa.select(Group, User, sa.func.count(GroupMembership.id))
-            .select_from(Group)
-            .join(User, User.id == invite.created_by_user_id)
-            .outerjoin(
-                GroupMembership,
-                GroupMembership.group_id == Group.id,
+            sa.select(GroupMembership.id).where(
+                GroupMembership.group_id == group_id,
+                GroupMembership.user_id == target_user_id,
             )
-            .where(Group.id == invite.group_id)
-            .group_by(Group.id, User.id)
         )
-    ).one_or_none()
-    if row is None:
-        raise ValueError("invalid_invite")
-    return invite, row[0], row[1], int(row[2])
+    ).scalar_one_or_none()
+    if membership is not None:
+        raise ValueError("already_member")
+
+    pending = (
+        await db.execute(
+            sa.select(GroupInvite.id).where(
+                GroupInvite.group_id == group_id,
+                GroupInvite.target_user_id == target_user_id,
+                GroupInvite.revoked_at.is_(None),
+                GroupInvite.expires_at > _now_utc(),
+                GroupInvite.uses_count < GroupInvite.max_uses,
+            )
+        )
+    ).scalar_one_or_none()
+    if pending is not None:
+        raise ValueError("invite_already_pending")
+
+    invite = GroupInvite(
+        group_id=group_id,
+        created_by_user_id=creator_id,
+        target_user_id=target_user_id,
+        expires_at=_now_utc() + timedelta(days=ttl_days),
+        max_uses=1,
+        uses_count=0,
+    )
+    db.add(invite)
+    await db.flush()
+    return invite
 
 
 async def _accept_group_invite_record(
@@ -312,7 +217,7 @@ async def _accept_group_invite_record(
     invite: GroupInvite,
 ) -> GroupInviteMutationResult:
     ensure_invite_active(invite)
-    if invite.target_user_id is not None and invite.target_user_id != user_id:
+    if invite.target_user_id != user_id:
         raise PermissionError("This invitation belongs to another user")
 
     membership = (
@@ -346,41 +251,18 @@ async def _accept_group_invite_record(
     )
 
 
-async def accept_group_invite(
-    db: AsyncSession, user_id: UUID, code: str
-) -> GroupInviteMutationResult:
-    code = code.strip()
-    invite = (
-        await db.execute(
-            sa.select(GroupInvite).where(GroupInvite.code == code).with_for_update()
-        )
-    ).scalar_one_or_none()
-    if invite is None:
-        raise ValueError("invalid_invite")
-    return await _accept_group_invite_record(db, user_id, invite)
-
-
-async def accept_group_link_invite(
-    db: AsyncSession,
-    user_id: UUID,
-    token: str,
-) -> GroupInviteMutationResult:
-    invite = await get_group_invite_by_token(db, token, lock=True)
-    return await _accept_group_invite_record(db, user_id, invite)
-
-
 async def list_group_invitations(
     db: AsyncSession,
     *,
     current_user_id: UUID,
     group_id: UUID | None,
-) -> list[tuple[GroupInvite, Group, User, User | None]]:
+) -> list[tuple[GroupInvite, Group, User, User]]:
     target = aliased(User)
     query = (
         sa.select(GroupInvite, Group, User, target)
         .join(Group, Group.id == GroupInvite.group_id)
         .join(User, User.id == GroupInvite.created_by_user_id)
-        .outerjoin(target, target.id == GroupInvite.target_user_id)
+        .join(target, target.id == GroupInvite.target_user_id)
         .where(
             GroupInvite.revoked_at.is_(None),
             GroupInvite.expires_at > _now_utc(),

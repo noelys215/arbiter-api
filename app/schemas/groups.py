@@ -55,32 +55,15 @@ class GroupDetailResponse(BaseModel):
     members: List[GroupMember]
 
 
-class GroupInviteResponse(BaseModel):
-    code: str
-    expires_at: datetime
-    max_uses: int
-    uses_count: int
-
-
 class CreateGroupInviteRequest(BaseModel):
-    target_user_id: UUID | None = None
-    max_uses: int = Field(default=25, ge=1, le=50)
+    target_user_id: UUID
 
 
-class GroupLinkInviteResponse(GroupInviteResponse):
+class GroupInviteCreateResponse(BaseModel):
     id: UUID
-    token: str
     group_id: UUID
-    target_user_id: UUID | None = None
-
-
-class GroupInvitePreview(BaseModel):
-    group_id: UUID
-    group_name: str
-    inviter: InvitePublicUser
-    member_count: int
+    target_user_id: UUID
     expires_at: datetime
-    targeted: bool
 
 
 class GroupInvitationListItem(BaseModel):
@@ -88,11 +71,8 @@ class GroupInvitationListItem(BaseModel):
     group_id: UUID
     group_name: str
     inviter: InvitePublicUser
-    target: InvitePublicUser | None = None
+    target: InvitePublicUser
     expires_at: datetime
-    max_uses: int
-    uses_count: int
-    targeted: bool
 
 
 class GroupInviteDecisionRequest(BaseModel):
@@ -103,10 +83,6 @@ class GroupInviteDecisionResponse(BaseModel):
     ok: bool
     decision: Literal["accepted", "declined"]
     already_member: bool = False
-
-
-class AcceptGroupInviteRequest(BaseModel):
-    code: str = Field(min_length=6, max_length=32)
 
 
 class LeaveGroupResponse(BaseModel):
