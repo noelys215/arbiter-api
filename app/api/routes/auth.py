@@ -38,8 +38,7 @@ from app.services.magic_link_email import (
 )
 from app.services.oauth import get_oauth_client, oauth_error_cls
 from app.services.users import (
-    ensure_account_names_available,
-    generate_unique_display_name,
+    ensure_username_available,
     username_exists,
 )
 
@@ -224,7 +223,9 @@ async def _upsert_oauth_user(
     display_name: str,
     avatar_url: str | None,
 ) -> User:
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(
+        select(User).where(sa.func.lower(User.email) == email.lower())
+    )
     user = result.scalar_one_or_none()
 
     if user is not None:
@@ -239,12 +240,11 @@ async def _upsert_oauth_user(
 
     username_seed = email.split("@", 1)[0]
     username = await _generate_unique_username(db, username_seed)
-    unique_display_name = await generate_unique_display_name(db, display_name)
     social_password = secrets.token_urlsafe(32)
     user = User(
         email=email,
         username=username,
-        display_name=unique_display_name,
+        display_name=display_name,
         avatar_url=avatar_url,
         password_hash=hash_password(social_password),
     )
@@ -288,17 +288,16 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
         reason = "magic_link_expired" if token_error == "expired" else "magic_link_invalid"
         return _oauth_failure_redirect(reason)
 
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(
+        select(User).where(sa.func.lower(User.email) == email.lower())
+    )
     user = result.scalar_one_or_none()
     if user is None:
         username = await _generate_unique_username(db, email.split("@", 1)[0])
-        display_name = await generate_unique_display_name(
-            db, _default_display_name_from_email(email)
-        )
         user = User(
             email=email,
             username=username,
-            display_name=display_name,
+            display_name=_default_display_name_from_email(email),
             password_hash=hash_password(secrets.token_urlsafe(32)),
         )
         db.add(user)
@@ -317,28 +316,20 @@ async def verify_magic_link(token: str, db: AsyncSession = Depends(get_db_sessio
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_session)):
+    normalized_email = str(payload.email).strip().lower()
     result = await db.execute(
-        select(User).where(sa.func.lower(User.email) == str(payload.email).lower())
+        select(User).where(sa.func.lower(User.email) == normalized_email)
     )
     existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="Email already in use")
     try:
-        await ensure_account_names_available(
-            db,
-            username=payload.username,
-            display_name=payload.display_name,
-        )
+        await ensure_username_available(db, username=payload.username)
     except ValueError as exc:
-        detail = (
-            "Username already in use"
-            if str(exc) == "username_taken"
-            else "Display name already in use"
-        )
-        raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=409, detail="Username already in use") from exc
 
     user = User(
-        email=payload.email,
+        email=normalized_email,
         username=payload.username,
         display_name=payload.display_name,
         password_hash=hash_password(payload.password),
@@ -350,7 +341,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_s
         await db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Username or display name already in use",
+            detail="Email or username already in use",
         ) from exc
     await db.refresh(user)
 
@@ -359,7 +350,9 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db_s
 
 @router.post("/login", response_model=LoginResponse)
 async def login(payload: LoginRequest, response: Response, db: AsyncSession = Depends(get_db_session)):
-    result = await db.execute(select(User).where(User.email == payload.email))
+    result = await db.execute(
+        select(User).where(sa.func.lower(User.email) == str(payload.email).lower())
+    )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.password_hash):

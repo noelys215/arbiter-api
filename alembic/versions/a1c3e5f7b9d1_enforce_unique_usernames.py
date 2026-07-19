@@ -1,4 +1,4 @@
-"""enforce case-insensitive unique account names
+"""enforce case-insensitive unique account identifiers
 
 Revision ID: a1c3e5f7b9d1
 Revises: f6a8b0c2d4e6
@@ -18,28 +18,24 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _deduplicate_account_names() -> None:
+def _deduplicate_usernames() -> None:
     connection = op.get_bind()
     users = sa.table(
         "users",
         sa.column("id", sa.Uuid()),
         sa.column("username", sa.String()),
-        sa.column("display_name", sa.String()),
         sa.column("created_at", sa.DateTime(timezone=True)),
     )
     records = connection.execute(
         sa.select(
             users.c.id,
             users.c.username,
-            users.c.display_name,
         ).order_by(users.c.created_at, users.c.id)
     ).all()
 
     used_usernames: set[str] = set()
-    used_display_names: set[str] = set()
-    reserved_usernames = {username.casefold() for _, username, _ in records}
-    reserved_display_names = {display_name.casefold() for _, _, display_name in records}
-    for user_id, username, display_name in records:
+    reserved_usernames = {username.casefold() for _, username in records}
+    for user_id, username in records:
         new_username = username
         if new_username.casefold() in used_usernames:
             attempt = 1
@@ -53,47 +49,35 @@ def _deduplicate_account_names() -> None:
                 ):
                     break
 
-        new_display_name = display_name
-        if new_display_name.casefold() in used_display_names:
-            attempt = 1
-            while True:
-                attempt += 1
-                suffix = f" ({attempt})"
-                new_display_name = f"{display_name[: 120 - len(suffix)]}{suffix}"
-                if (
-                    new_display_name.casefold() not in used_display_names
-                    and new_display_name.casefold() not in reserved_display_names
-                ):
-                    break
-
         used_usernames.add(new_username.casefold())
-        used_display_names.add(new_display_name.casefold())
-        if new_username != username or new_display_name != display_name:
+        if new_username != username:
             connection.execute(
                 users.update()
                 .where(users.c.id == user_id)
-                .values(username=new_username, display_name=new_display_name)
+                .values(username=new_username)
             )
 
 
 def upgrade() -> None:
+    op.drop_index("ix_users_email", table_name="users")
     op.drop_index("ix_users_username", table_name="users")
-    _deduplicate_account_names()
+    _deduplicate_usernames()
+    op.create_index(
+        "uq_users_email_lower",
+        "users",
+        [sa.text("lower(email)")],
+        unique=True,
+    )
     op.create_index(
         "uq_users_username_lower",
         "users",
         [sa.text("lower(username)")],
         unique=True,
     )
-    op.create_index(
-        "uq_users_display_name_lower",
-        "users",
-        [sa.text("lower(display_name)")],
-        unique=True,
-    )
 
 
 def downgrade() -> None:
-    op.drop_index("uq_users_display_name_lower", table_name="users")
     op.drop_index("uq_users_username_lower", table_name="users")
+    op.drop_index("uq_users_email_lower", table_name="users")
+    op.create_index("ix_users_email", "users", ["email"], unique=True)
     op.create_index("ix_users_username", "users", ["username"], unique=True)

@@ -13,13 +13,12 @@ def _u(prefix: str) -> str:
 
 
 async def register_user(client, *, email: str, username: str, display_name: str, password: str) -> str:
-    unique_display_name = f"{display_name} {username}"
     r = await client.post(
         "/auth/register",
         json={
             "email": email,
             "username": username,
-            "display_name": unique_display_name[:120],
+            "display_name": display_name,
             "password": password,
         },
     )

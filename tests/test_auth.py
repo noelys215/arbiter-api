@@ -45,7 +45,7 @@ async def test_display_name_rejects_blank_value(client, user_factory, login_help
     assert response.status_code == 422
 
 
-async def test_registration_rejects_case_insensitive_account_name_conflicts(
+async def test_registration_rejects_case_insensitive_identifier_conflicts(
     client, user_factory, unique_str
 ):
     existing = await user_factory(
@@ -53,6 +53,18 @@ async def test_registration_rejects_case_insensitive_account_name_conflicts(
         username=unique_str("UniqueUser"),
         display_name=unique_str("Unique Display"),
     )
+    email_response = await client.post(
+        "/auth/register",
+        json={
+            "email": existing["email"].upper(),
+            "username": unique_str("another_user"),
+            "display_name": unique_str("Another Display"),
+            "password": "SuperSecret123",
+        },
+    )
+    assert email_response.status_code == 409
+    assert email_response.json()["detail"] == "Email already in use"
+
     payload = {
         "email": f"{unique_str('email')}@example.com",
         "username": existing["username"].swapcase(),
@@ -63,33 +75,25 @@ async def test_registration_rejects_case_insensitive_account_name_conflicts(
     assert response.status_code == 409
     assert response.json()["detail"] == "Username already in use"
 
-    payload.update(
-        email=f"{unique_str('email')}@example.com",
-        username=unique_str("another_user"),
-        display_name=existing["display_name"].swapcase(),
+    login = await client.post(
+        "/auth/login",
+        json={"email": existing["email"].upper(), "password": existing["password"]},
     )
-    response = await client.post("/auth/register", json=payload)
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Display name already in use"
+    assert login.status_code == 200
 
-
-async def test_profile_display_name_conflicts_are_case_insensitive(
+async def test_display_names_can_be_shared_between_accounts(
     client, user_factory, login_helper, unique_str
 ):
+    shared_name = unique_str("Shared Name")
     current = await user_factory(client, display_name=unique_str("Current Name"))
-    other = await user_factory(client, display_name=unique_str("Taken Name"))
+    other = await user_factory(client, display_name=shared_name)
     await login_helper(client, email=current["email"], password=current["password"])
 
     response = await client.patch(
-        "/me", json={"display_name": other["display_name"].swapcase()}
-    )
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Display name already in use"
-
-    response = await client.patch(
-        "/me", json={"display_name": current["display_name"].swapcase()}
+        "/me", json={"display_name": other["display_name"]}
     )
     assert response.status_code == 200
+    assert response.json()["display_name"] == shared_name
 
 
 async def test_oauth_login_preserves_custom_display_name(

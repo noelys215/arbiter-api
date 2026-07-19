@@ -15,7 +15,7 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
     username: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
 
@@ -33,6 +33,6 @@ class User(Base):
     group_memberships = relationship("GroupMembership", back_populates="user")
 
     __table_args__ = (
+        sa.Index("uq_users_email_lower", sa.func.lower(email), unique=True),
         sa.Index("uq_users_username_lower", sa.func.lower(username), unique=True),
-        sa.Index("uq_users_display_name_lower", sa.func.lower(display_name), unique=True),
     )

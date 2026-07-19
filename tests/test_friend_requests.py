@@ -149,27 +149,19 @@ async def test_unknown_email_is_a_private_successful_noop(
     }
 
 
-async def test_friend_request_accepts_email_username_and_display_name(
+async def test_friend_request_accepts_email_and_username(
     client, user_factory, login_helper, unique_str
 ):
     sender = await user_factory(client, display_name=unique_str("Sender"))
     await login_helper(client, email=sender["email"], password=sender["password"])
     recipients = [
         await user_factory(client, display_name=unique_str(label))
-        for label in (
-            "Email Friend",
-            "Username Friend",
-            "At User",
-            "Display Friend",
-            "Screening@Home",
-        )
+        for label in ("Email Friend", "Username Friend", "At User")
     ]
     identifiers = [
         recipients[0]["email"].upper(),
         recipients[1]["username"].swapcase(),
         f"@{recipients[2]['username'].swapcase()}",
-        recipients[3]["display_name"].swapcase(),
-        recipients[4]["display_name"].swapcase(),
     ]
 
     for recipient, identifier in zip(recipients, identifiers, strict=True):
@@ -183,6 +175,15 @@ async def test_friend_request_accepts_email_username_and_display_name(
         assert (
             await client.delete(f"/friends/requests/{outgoing[0]['id']}")
         ).status_code == 200
+
+    display_only = await user_factory(
+        client, display_name=unique_str("Display Only")
+    )
+    response = await client.post(
+        "/friends/requests", json={"identifier": display_only["display_name"]}
+    )
+    assert response.status_code == 201
+    assert (await client.get("/friends/requests")).json()["outgoing"] == []
 
 
 async def test_friend_request_emits_compact_updates_after_commit(
