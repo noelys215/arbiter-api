@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     feedback_authenticated_enabled: bool = Field(
         default=False, alias="FEEDBACK_AUTHENTICATED_ENABLED"
     )
+    rate_limit_redis_url: str | None = Field(
+        default=None, alias="RATE_LIMIT_REDIS_URL"
+    )
     magic_link_verify_url: str = Field(
         default="https://www.arbitertv.com/auth/magic-link/verify",
         alias="MAGIC_LINK_VERIFY_URL",

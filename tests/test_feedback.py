@@ -138,12 +138,18 @@ async def test_honeypot_returns_success_without_delivery(client, monkeypatch):
     from app.api.routes import feedback as feedback_route
 
     called = False
+    limiter_called = False
 
     async def record(*args, **kwargs):
         nonlocal called
         called = True
 
+    async def check_limit(*args, **kwargs):
+        nonlocal limiter_called
+        limiter_called = True
+
     monkeypatch.setattr(feedback_route, "send_feedback_email", record)
+    monkeypatch.setattr(feedback_route, "check_feedback_rate_limit", check_limit)
     response = await client.post(
         "/feedback",
         json=feedback_payload(website="https://spam.example"),
@@ -152,6 +158,61 @@ async def test_honeypot_returns_success_without_delivery(client, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert called is False
+    assert limiter_called is False
+
+
+async def test_rate_limited_feedback_returns_retry_after_without_delivery(
+    client,
+    monkeypatch,
+):
+    from app.api.routes import feedback as feedback_route
+    from app.services.feedback_rate_limit import FeedbackRateLimitDecision
+
+    configure_feedback(monkeypatch)
+    delivered = False
+
+    async def blocked(*args, **kwargs):
+        return FeedbackRateLimitDecision(allowed=False, retry_after=321)
+
+    async def deliver(*args, **kwargs):
+        nonlocal delivered
+        delivered = True
+
+    monkeypatch.setattr(feedback_route, "check_feedback_rate_limit", blocked)
+    monkeypatch.setattr(feedback_route, "send_feedback_email", deliver)
+    response = await client.post("/feedback", json=feedback_payload())
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "321"
+    assert response.json() == {"detail": "Too many feedback submissions"}
+    assert delivered is False
+
+
+async def test_rate_limit_failure_is_generic_and_does_not_deliver(
+    client,
+    monkeypatch,
+):
+    from app.api.routes import feedback as feedback_route
+    from app.services.feedback_rate_limit import FeedbackRateLimitUnavailable
+
+    configure_feedback(monkeypatch)
+    delivered = False
+
+    async def unavailable(*args, **kwargs):
+        raise FeedbackRateLimitUnavailable("private redis details")
+
+    async def deliver(*args, **kwargs):
+        nonlocal delivered
+        delivered = True
+
+    monkeypatch.setattr(feedback_route, "check_feedback_rate_limit", unavailable)
+    monkeypatch.setattr(feedback_route, "send_feedback_email", deliver)
+    response = await client.post("/feedback", json=feedback_payload())
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Feedback is currently unavailable"}
+    assert "redis" not in response.text.lower()
+    assert delivered is False
 
 
 @pytest.mark.parametrize(

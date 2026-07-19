@@ -250,6 +250,7 @@ Common optional vars:
 - `FEEDBACK_FROM_EMAIL` (verified Resend sender)
 - `FEEDBACK_PUBLIC_ENABLED` (default `false`; enable only after production-safe rate limiting is configured)
 - `FEEDBACK_AUTHENTICATED_ENABLED` (default `false`; explicit acceptance of authenticated-endpoint abuse risk)
+- `RATE_LIMIT_REDIS_URL` (private Render Key Value URL used by the feedback limiter)
 - `MAGIC_LINK_VERIFY_URL` (production default `https://www.arbitertv.com/auth/magic-link/verify`; local runs use `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
 - `LOCAL_AUTH_BYPASS_TOKEN`: local/test-only token for `POST /auth/local-bypass`; never set this in production
@@ -271,14 +272,13 @@ routes without logging request bodies or raw invite tokens. The application
 enforces authorization, expiry, revocation, and use limits, but does not ship an
 in-process rate limiter.
 
-The same launch requirement applies to `POST /feedback`. Render's included
-DDoS protection is not a configurable per-route submission limit. Keep
-`FEEDBACK_PUBLIC_ENABLED=false` and omit `VITE_PUBLIC_FEEDBACK_ENABLED` until
-the API hostname is behind a production-safe reverse-proxy/WAF rule (for
-example, a Cloudflare rate-limiting rule of approximately 3 requests per 15
-minutes per IP), or until a shared Redis/Render Key Value-backed limiter is in
-place. Authenticated feedback is also opt-in through
-`FEEDBACK_AUTHENTICATED_ENABLED` and `VITE_ACCOUNT_FEEDBACK_ENABLED`.
+`POST /feedback` uses the shared Redis-compatible service configured through
+`RATE_LIMIT_REDIS_URL`. Signed-out visitors are limited to 3 submissions per 15
+minutes per IP. Signed-in users are limited to 5 per account, with an additional
+10-per-IP safety limit. Identifiers are HMAC-hashed before they become Redis
+keys, and production feedback fails closed when the limiter is unavailable.
+Keep `FEEDBACK_PUBLIC_ENABLED=false` and `FEEDBACK_AUTHENTICATED_ENABLED=false`
+until the Key Value connection has been verified after deployment.
 
 1) Push this backend repo and create a new Render Blueprint service from `render.yaml`.
 2) Render will provision:
@@ -290,6 +290,7 @@ place. Authenticated feedback is also opt-in through
 - `OPENAI_API_KEY`: only if you want AI reranking/parsing
 - `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: required for magic-link emails
 - `FEEDBACK_RECIPIENT_EMAIL` and `FEEDBACK_FROM_EMAIL`: required for feedback delivery
+- `RATE_LIMIT_REDIS_URL`: internal URL for the same-region Render Key Value instance
 - `MAGIC_LINK_VERIFY_URL`: where users click from email (backend verify URL or frontend verify route)
 - OAuth vars only if you are using Google OAuth
 4) Keep cookie settings for cross-domain frontend/API auth:

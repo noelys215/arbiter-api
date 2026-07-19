@@ -33,6 +33,7 @@ from app.api.routes.group_invites import router as group_invites_router
 from app.api.routes.realtime import router as realtime_router
 from app.api.routes.feedback import router as feedback_router
 from app.middleware.feedback_body_limit import FeedbackBodyLimitMiddleware
+from app.services.feedback_rate_limit import close_feedback_rate_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -96,3 +97,5 @@ app.include_router(sessions_router)
 
 mcp = FastApiMCP(app)
 mcp.mount_http()
+
+app.add_event_handler("shutdown", close_feedback_rate_limiter)

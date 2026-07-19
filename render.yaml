@@ -65,6 +65,8 @@ services:
         value: "false"
       - key: FEEDBACK_AUTHENTICATED_ENABLED
         value: "false"
+      - key: RATE_LIMIT_REDIS_URL
+        sync: false
       - key: MAGIC_LINK_VERIFY_URL
         value: https://www.arbitertv.com/auth/magic-link/verify
       - key: MAGIC_LINK_EXPIRE_MINUTES

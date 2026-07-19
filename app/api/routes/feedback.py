@@ -10,6 +10,10 @@ from app.api.deps import COOKIE_NAME, get_db, get_optional_user
 from app.core.config import settings
 from app.schemas.feedback import FeedbackRequest, FeedbackResponse
 from app.services.feedback import feedback_email_configured, send_feedback_email
+from app.services.feedback_rate_limit import (
+    FeedbackRateLimitUnavailable,
+    check_feedback_rate_limit,
+)
 
 router = APIRouter(tags=["feedback"])
 logger = logging.getLogger(__name__)
@@ -50,6 +54,26 @@ async def submit_feedback(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Feedback is currently unavailable",
+        )
+
+    try:
+        rate_limit = await check_feedback_rate_limit(
+            request,
+            user=user,
+            submission_id=payload.submission_id,
+        )
+    except FeedbackRateLimitUnavailable:
+        logger.warning("Feedback delivery unavailable because rate limiting failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Feedback is currently unavailable",
+        ) from None
+
+    if not rate_limit.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many feedback submissions",
+            headers={"Retry-After": str(max(rate_limit.retry_after, 1))},
         )
 
     try:
