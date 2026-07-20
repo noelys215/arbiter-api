@@ -24,6 +24,7 @@ from app.models.tonight_vote import TonightVote
 from app.models.user import User
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.tonight_constraints import TonightConstraints
+from app.schemas.mood_cues import MOOD_CUE_MATCH_KEYS
 from app.services.ai import AIError, ai_parse_constraints, ai_rerank_candidates
 from app.services.tmdb import (
     fetch_tmdb_title_company_names,
@@ -1377,6 +1378,12 @@ def _derive_requested_moods(constraints: TonightConstraints) -> list[str]:
 
     for mood in constraints.moods:
         canonical = _canonicalize_mood(mood)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            selected.append(canonical)
+
+    for cue_id in constraints.mood_cues:
+        canonical = MOOD_CUE_MATCH_KEYS.get(cue_id)
         if canonical and canonical not in seen:
             seen.add(canonical)
             selected.append(canonical)

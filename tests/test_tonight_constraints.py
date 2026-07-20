@@ -6,12 +6,14 @@ from app.schemas.tonight_constraints import TonightConstraints
 
 def test_defaults_are_canonical():
     c = TonightConstraints()
+    assert c.mood_cues == []
     assert c.moods == []
     assert c.avoid == []
     assert c.max_runtime is None
     assert c.format == "any"
     assert c.energy is None
     assert c.free_text == ""
+    assert c.custom_mood_text == ""
     assert c.parsed_by_ai is False
     assert c.ai_version is None
 
@@ -37,3 +39,21 @@ def test_runtime_bounds():
         TonightConstraints(max_runtime=10)
     with pytest.raises(ValidationError):
         TonightConstraints(max_runtime=9999)
+
+
+def test_structured_mood_cues_are_stable_and_limited():
+    c = TonightConstraints(
+        mood_cues=["easygoing", "mind-bending", "easygoing"],
+        custom_mood_text="  Something romantic but not cheesy.  ",
+    )
+    assert c.mood_cues == ["easygoing", "mind-bending"]
+    assert c.custom_mood_text == "Something romantic but not cheesy."
+
+    with pytest.raises(ValidationError):
+        TonightConstraints(mood_cues=["not-a-real-cue"])
+    with pytest.raises(ValidationError):
+        TonightConstraints(
+            mood_cues=["easygoing", "high-energy", "slow-burn", "date-night"]
+        )
+    with pytest.raises(ValidationError):
+        TonightConstraints(custom_mood_text="x" * 241)

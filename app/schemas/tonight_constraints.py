@@ -3,12 +3,15 @@ from __future__ import annotations
 from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.mood_cues import MOOD_CUE_IDS
+
 
 FormatType = Literal["movie", "tv", "any"]
 EnergyType = Literal["low", "med", "high"]
 
 
 class TonightConstraints(BaseModel):
+    mood_cues: list[str] = Field(default_factory=list, max_length=3)
     moods: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
 
@@ -17,6 +20,7 @@ class TonightConstraints(BaseModel):
     energy: EnergyType | None = Field(default=None)
 
     free_text: str = Field(default="")
+    custom_mood_text: str = Field(default="", max_length=240)
     parsed_by_ai: bool = Field(default=False)
     ai_version: str | None = Field(default=None)
 
@@ -37,7 +41,21 @@ class TonightConstraints(BaseModel):
             cleaned.append(s2)
         return cleaned
 
-    @field_validator("free_text")
+    @field_validator("mood_cues")
+    @classmethod
+    def validate_mood_cues(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for cue_id in value:
+            normalized = (cue_id or "").strip().lower()
+            if normalized not in MOOD_CUE_IDS:
+                raise ValueError(f"Unknown mood cue: {normalized or 'empty'}")
+            if normalized not in cleaned:
+                cleaned.append(normalized)
+        if len(cleaned) > 3:
+            raise ValueError("Choose no more than 3 mood cues")
+        return cleaned
+
+    @field_validator("free_text", "custom_mood_text")
     @classmethod
     def normalize_text(cls, v: str) -> str:
         return (v or "").strip()

@@ -28,6 +28,7 @@ from app.schemas.session_history import (
     GroupMovieNightPage,
     WatchedStatusUpdateRequest,
 )
+from app.schemas.mood_cues import MOOD_CUES, MoodCueOut
 from app.services.groups import list_group_member_ids
 from app.services.session_history import (
     candidate_source_id,
@@ -203,6 +204,11 @@ async def create_session_route(
         raise permission_error(e) from e
     except ValueError as e:
         raise value_error(e) from e
+
+
+@router.get("/mood-cues", response_model=list[MoodCueOut])
+async def mood_cues_route():
+    return list(MOOD_CUES)
 
 @router.post("/sessions/{session_id}/vote", status_code=200)
 async def vote_route(

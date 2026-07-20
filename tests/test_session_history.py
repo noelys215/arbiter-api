@@ -11,7 +11,9 @@ from app.models.tonight_session_vote_snapshot import TonightSessionVoteSnapshot
 from social_helpers import add_friend_to_group, create_friendship
 
 
-async def _create_winner(async_client, user_factory, login_helper):
+async def _create_winner(
+    async_client, user_factory, login_helper, *, constraints: dict | None = None
+):
     user = await user_factory(async_client, display_name="History Host")
     await login_helper(
         async_client, email=user["email"], password=user["password"]
@@ -36,7 +38,7 @@ async def _create_winner(async_client, user_factory, login_helper):
     created = await async_client.post(
         f"/groups/{group['id']}/sessions",
         json={
-            "constraints": {"moods": ["cozy"], "format": "movie"},
+            "constraints": constraints or {"moods": ["cozy"], "format": "movie"},
             "duration_seconds": 90,
             "candidate_count": 5,
         },
@@ -47,6 +49,52 @@ async def _create_winner(async_client, user_factory, login_helper):
     assert winner.status_code == 200, winner.text
     assert winner.json()["status"] == "winner_selected"
     return user, group, item_ids, session_id
+
+
+@pytest.mark.anyio
+async def test_mood_catalogue_and_completed_session_preserve_structured_context(
+    async_client, user_factory, login_helper
+):
+    catalogue = await async_client.get("/mood-cues")
+    assert catalogue.status_code == 200
+    cue_ids = {cue["id"] for cue in catalogue.json()}
+    assert {"easygoing", "mind-bending", "date-night"}.issubset(cue_ids)
+
+    criteria = {
+        "mood_cues": ["date-night", "easygoing"],
+        "moods": ["Romance"],
+        "max_runtime": 120,
+        "format": "movie",
+        "custom_mood_text": "Something romantic but not cheesy.",
+    }
+    _, _, _, session_id = await _create_winner(
+        async_client,
+        user_factory,
+        login_helper,
+        constraints=criteria,
+    )
+    completed = await async_client.post(f"/sessions/{session_id}/completion")
+    assert completed.status_code == 200, completed.text
+    saved = completed.json()["criteria"]
+    assert saved["mood_cues"] == ["date-night", "easygoing"]
+    assert saved["custom_mood_text"] == "Something romantic but not cheesy."
+    assert saved["max_runtime"] == 120
+
+
+@pytest.mark.anyio
+async def test_invalid_mood_cue_is_rejected(async_client, user_factory, login_helper):
+    user = await user_factory(async_client, display_name="Mood Host")
+    await login_helper(async_client, email=user["email"], password=user["password"])
+    group = (await async_client.post("/groups", json={"name": "Mood Club"})).json()
+    response = await async_client.post(
+        f"/groups/{group['id']}/sessions",
+        json={
+            "constraints": {"mood_cues": ["invented-cue"]},
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        },
+    )
+    assert response.status_code == 400
 
 
 @pytest.mark.anyio
@@ -88,6 +136,53 @@ async def test_completion_is_idempotent_and_survives_watchlist_deletion(
     history = await async_client.get(f"/groups/{group['id']}/movie-nights")
     assert history.status_code == 200, history.text
     assert [row["session_id"] for row in history.json()["items"]] == [session_id]
+
+
+@pytest.mark.anyio
+async def test_group_history_is_newest_first_and_cursor_paginated(
+    async_client, user_factory, login_helper
+):
+    _, group, _, first_session_id = await _create_winner(
+        async_client, user_factory, login_helper
+    )
+    assert (
+        await async_client.post(f"/sessions/{first_session_id}/completion")
+    ).status_code == 200
+
+    second = await async_client.post(
+        f"/groups/{group['id']}/sessions",
+        json={
+            "constraints": {"mood_cues": ["easygoing"]},
+            "duration_seconds": 90,
+            "candidate_count": 5,
+        },
+    )
+    assert second.status_code == 201, second.text
+    second_session_id = second.json()["session_id"]
+    assert (
+        await async_client.post(f"/sessions/{second_session_id}/shuffle")
+    ).status_code == 200
+    assert (
+        await async_client.post(f"/sessions/{second_session_id}/completion")
+    ).status_code == 200
+
+    first_page = await async_client.get(
+        f"/groups/{group['id']}/movie-nights?limit=1"
+    )
+    assert first_page.status_code == 200
+    assert [item["session_id"] for item in first_page.json()["items"]] == [
+        second_session_id
+    ]
+    assert first_page.json()["next_cursor"] == "1"
+
+    second_page = await async_client.get(
+        f"/groups/{group['id']}/movie-nights?limit=1&cursor=1"
+    )
+    assert second_page.status_code == 200
+    assert [item["session_id"] for item in second_page.json()["items"]] == [
+        first_session_id
+    ]
+    assert second_page.json()["next_cursor"] is None
 
 
 @pytest.mark.anyio
@@ -259,16 +354,32 @@ async def test_participant_and_group_snapshots_survive_later_changes(
                     "poster_path": None,
                 },
             )
-        body = {
-            "constraints": {"moods": ["cozy"]},
+        host_body = {
+            "constraints": {
+                "mood_cues": ["date-night"],
+                "custom_mood_text": "Something romantic but not cheesy.",
+            },
             "confirm_ready": False,
             "duration_seconds": 90,
             "candidate_count": 5,
         }
-        created = await async_client.post(f"/groups/{group['id']}/sessions", json=body)
+        guest_body = {
+            **host_body,
+            "constraints": {
+                "mood_cues": ["make-us-laugh"],
+                "custom_mood_text": "Something light after a long week.",
+            },
+        }
+        created = await async_client.post(
+            f"/groups/{group['id']}/sessions", json=host_body
+        )
         session_id = created.json()["session_id"]
-        assert (await client_b.post(f"/groups/{group['id']}/sessions", json=body)).status_code == 201
-        confirm = {**body, "constraints": {}, "confirm_ready": True}
+        assert (
+            await client_b.post(
+                f"/groups/{group['id']}/sessions", json=guest_body
+            )
+        ).status_code == 201
+        confirm = {**host_body, "constraints": {}, "confirm_ready": True}
         assert (
             await async_client.post(f"/groups/{group['id']}/sessions", json=confirm)
         ).status_code == 201
@@ -292,6 +403,18 @@ async def test_participant_and_group_snapshots_survive_later_changes(
             "Original Host",
             "Original Guest",
         }
+        assert completed.json()["criteria"]["mood_cues"] == ["date-night"]
+        assert (
+            completed.json()["criteria"]["custom_mood_text"]
+            == "Something romantic but not cheesy."
+        )
+        participant_criteria = {
+            row["display_name"]: row["criteria"]
+            for row in completed.json()["participants"]
+        }
+        assert participant_criteria["Original Guest"]["mood_cues"] == [
+            "make-us-laugh"
+        ]
 
         denied = await client_b.patch(
             f"/sessions/{session_id}/completion/watched",

@@ -49,9 +49,23 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 
 def _canonical_criteria(session: TonightSession) -> dict[str, Any]:
+    source_constraints = session.constraints or {}
+    runtime = _runtime(session)
+    collecting = runtime.get("collecting")
+    user_constraints = (
+        collecting.get("user_constraints") if isinstance(collecting, dict) else None
+    )
+    host_constraints = (
+        user_constraints.get(str(session.created_by_user_id))
+        if isinstance(user_constraints, dict)
+        else None
+    )
+    if isinstance(host_constraints, dict):
+        source_constraints = host_constraints
+
     public_constraints = {
         key: value
-        for key, value in (session.constraints or {}).items()
+        for key, value in source_constraints.items()
         if key != SESSION_RUNTIME_KEY
     }
     return TonightConstraints.model_validate(public_constraints).model_dump(mode="json")
