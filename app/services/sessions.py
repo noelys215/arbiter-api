@@ -32,6 +32,7 @@ from app.services.tmdb import (
     fetch_tmdb_title_taxonomy,
     fetch_web_title_company_names,
 )
+from app.services.session_history import candidate_source_id, freeze_winner_result
 from app.services.watchlist import assert_user_in_group
 
 
@@ -1625,7 +1626,7 @@ def _normalize_watch_party_url(value: str | None) -> str | None:
 
 
 def _session_base_candidate_ids(s: TonightSession) -> list[uuid.UUID]:
-    return [c.watchlist_item_id for c in sorted(s.candidates, key=lambda x: x.position)]
+    return [candidate_source_id(c) for c in sorted(s.candidates, key=lambda x: x.position)]
 
 
 def _runtime_round_state(runtime: dict[str, Any], round_num: int) -> dict[str, Any]:
@@ -1908,9 +1909,15 @@ async def _advance_rounds_if_needed(
         if winner is not None:
             runtime["tie_break_required"] = False
             runtime["tie_break_candidate_ids"] = []
-            s.status = "complete"
-            s.completed_at = now
-            s.result_watchlist_item_id = winner
+            await freeze_winner_result(
+                db,
+                session=s,
+                runtime=runtime,
+                winner_source_id=winner,
+                now=now,
+                had_tie=False,
+                tie_resolution="votes",
+            )
             return
 
         runtime["phase"] = "tiebreak"
@@ -1929,9 +1936,15 @@ async def _advance_rounds_if_needed(
         candidate_ids=round2_ids,
         round_votes=round2_state["votes"],
     )
-    s.status = "complete"
-    s.completed_at = now
-    s.result_watchlist_item_id = winner
+    await freeze_winner_result(
+        db,
+        session=s,
+        runtime=runtime,
+        winner_source_id=winner,
+        now=now,
+        had_tie=True,
+        tie_resolution="tiebreak_votes",
+    )
 
 
 async def _load_active_group_session(
@@ -1946,7 +1959,10 @@ async def _load_active_group_session(
             .selectinload(TonightSessionCandidate.watchlist_item)
             .selectinload(WatchlistItem.title)
         )
-        .where(TonightSession.group_id == group_id, TonightSession.status == "active")
+        .where(
+            TonightSession.group_id == group_id,
+            TonightSession.status.in_(("setup", "active", "winner_selected")),
+        )
         .order_by(TonightSession.created_at.desc())
         .limit(1)
     )
@@ -2107,11 +2123,52 @@ async def _replace_session_candidates(
     await db.execute(
         sa.delete(TonightSessionCandidate).where(TonightSessionCandidate.session_id == session_id)
     )
+    items = (
+        await db.execute(
+            select(WatchlistItem)
+            .options(selectinload(WatchlistItem.title))
+            .where(WatchlistItem.id.in_(candidate_ids))
+        )
+    ).scalars().all()
+    items_by_id = {item.id: item for item in items}
+
+    async def snapshot_genres(item: WatchlistItem) -> list[str]:
+        title = item.title
+        if title.source != "tmdb" or not title.source_id:
+            return []
+        try:
+            genres, _, _ = await fetch_tmdb_title_taxonomy(
+                tmdb_id=int(title.source_id), media_type=title.media_type
+            )
+        except Exception:
+            return []
+        return sorted(genres)
+
+    genre_rows = await asyncio.gather(
+        *[snapshot_genres(items_by_id[item_id]) for item_id in candidate_ids]
+    )
+    genres_by_id = dict(zip(candidate_ids, genre_rows, strict=True))
+
     rows: list[TonightSessionCandidate] = []
     for pos, item_id in enumerate(candidate_ids):
+        item = items_by_id.get(item_id)
+        if item is None:
+            raise ValueError("A session candidate is no longer in the watchlist")
+        title = item.title
         row = TonightSessionCandidate(
             session_id=session_id,
             watchlist_item_id=item_id,
+            source_watchlist_item_id=item_id,
+            source_title_id=title.id,
+            title_source=title.source,
+            title_source_id=title.source_id,
+            media_type=title.media_type,
+            title_name=title.name,
+            release_year=title.release_year,
+            poster_path=title.poster_path,
+            runtime_minutes=title.runtime_minutes,
+            genres=genres_by_id.get(item_id, []),
+            overview=title.overview,
             position=pos,
             ai_note=(notes_by_item_id or {}).get(item_id),
         )
@@ -2178,7 +2235,10 @@ async def _finalize_collecting_to_swipe(
                     bucket.update(canonical_moods)
 
     if not ordered_ids:
-        ordered_ids = [c.watchlist_item_id for c in sorted(s.candidates, key=lambda c: c.position)]
+        ordered_ids = [
+            candidate_source_id(c)
+            for c in sorted(s.candidates, key=lambda c: c.position)
+        ]
 
     combined = _dedupe_uuid_sequence(ordered_ids)
     notes_by_item_id: dict[uuid.UUID, str] = {}
@@ -2225,6 +2285,8 @@ async def _finalize_collecting_to_swipe(
 
     s.ends_at = now + timedelta(seconds=ROUND_TIMER_SECONDS)
     s.duration_seconds = ROUND_TIMER_SECONDS
+    s.status = "active"
+    s.started_at = s.started_at or now
     return rows
 
 
@@ -2259,6 +2321,7 @@ async def create_tonight_session(
             candidate_count=candidate_count,
             ai_used=False,
             ai_why=None,
+            status="setup",
         )
         db.add(sess)
         await db.flush()
@@ -2390,7 +2453,7 @@ def _session_candidates_for_ids(
     if not candidate_ids:
         return ordered
     allowed = {item_id for item_id in candidate_ids}
-    return [c for c in ordered if c.watchlist_item_id in allowed]
+    return [c for c in ordered if candidate_source_id(c) in allowed]
 
 
 def _round1_shortlist(runtime: dict[str, Any]) -> list[uuid.UUID]:
@@ -2664,10 +2727,16 @@ async def resolve_if_expired(db: AsyncSession, *, session_id: uuid.UUID) -> Toni
         return s
 
     winner_item_id = await _compute_winner(db, s)
-    s.status = "complete"
-    s.completed_at = now
-    s.result_watchlist_item_id = winner_item_id
     runtime = _ensure_runtime(s)
+    await freeze_winner_result(
+        db,
+        session=s,
+        runtime=runtime,
+        winner_source_id=winner_item_id,
+        now=now,
+        had_tie=None,
+        tie_resolution="expiry",
+    )
     _persist_runtime(s, runtime)
     return s
 
@@ -2789,9 +2858,15 @@ async def shuffle_and_complete(db: AsyncSession, *, session_id: uuid.UUID, user_
 
     winner = rng.choice(deck_item_ids)
 
-    s.status = "complete"
-    s.completed_at = now
-    s.result_watchlist_item_id = winner
+    await freeze_winner_result(
+        db,
+        session=s,
+        runtime=runtime,
+        winner_source_id=winner,
+        now=now,
+        had_tie=phase == "tiebreak",
+        tie_resolution="leader_shuffle",
+    )
     runtime["phase"] = "swiping"
     runtime["tie_break_required"] = False
     runtime["tie_break_candidate_ids"] = []
@@ -2808,9 +2883,9 @@ async def end_session(db: AsyncSession, *, session_id: uuid.UUID, user_id: uuid.
 
     now = datetime.now(timezone.utc)
     runtime = _ensure_runtime(s)
-    if s.status == "active":
-        s.status = "complete"
-        s.completed_at = now
+    if s.status in {"setup", "active", "winner_selected"}:
+        s.status = "cancelled"
+        s.cancelled_at = now
         runtime["phase"] = "swiping"
         runtime["tie_break_required"] = False
         runtime["tie_break_candidate_ids"] = []
@@ -2858,7 +2933,22 @@ async def _build_session_state_view(
 ) -> SessionStateView:
     runtime = _ensure_runtime(s)
     member_ids = await _group_member_ids(db, group_id=s.group_id)
-    if s.status == "complete":
+    if s.status == "cancelled":
+        return SessionStateView(
+            session=s,
+            candidates=[],
+            phase="complete",
+            round=0,
+            user_locked=True,
+            user_seconds_left=0,
+            mutual_candidate_ids=[],
+            shortlist=[],
+            vote_summaries=[],
+            tie_break_required=False,
+            tie_break_candidate_ids=[],
+            ended_by_leader=bool(runtime.get("ended_by_leader")),
+        )
+    if s.status in {"winner_selected", "completed", "complete"}:
         shortlist = _round1_shortlist(runtime)
         display_ids = _candidate_ids_for_round(s, runtime, 1)
         display_candidates = _session_candidates_for_ids(s, candidate_ids=display_ids)
@@ -2980,7 +3070,7 @@ async def _build_session_state_view(
 
     await _advance_rounds_if_needed(db, s=s, runtime=runtime, now=now)
 
-    if s.status == "complete":
+    if s.status in {"winner_selected", "completed", "complete"}:
         _persist_runtime(s, runtime)
         await db.flush()
         shortlist = _round1_shortlist(runtime)
@@ -2988,7 +3078,7 @@ async def _build_session_state_view(
             s,
             candidate_ids=_candidate_ids_for_round(s, runtime, 1),
         )
-        complete_display_ids = [card.watchlist_item_id for card in display_candidates]
+        complete_display_ids = [candidate_source_id(card) for card in display_candidates]
         vote_summaries = await _round1_vote_summaries(
             db,
             runtime,

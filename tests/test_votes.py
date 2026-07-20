@@ -54,7 +54,7 @@ async def test_vote_upserts_and_is_blind(async_client, user_factory, login_helpe
     # poll state: should not include tallies
     st = (await async_client.get(f"/sessions/{session_id}")).json()
     assert "tallies" not in st
-    assert st["status"] in ("active", "complete")
+    assert st["status"] in ("active", "winner_selected")
 
 
 @pytest.mark.anyio
@@ -206,7 +206,7 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
 
         # GET should auto-resolve
         st = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert st["status"] == "complete"
+        assert st["status"] == "winner_selected"
         assert st["result_watchlist_item_id"] in (i1["id"], i2["id"])
         summaries = {
             row["watchlist_item_id"]: row
@@ -266,9 +266,9 @@ async def test_shuffle_completes_session(async_client, user_factory, login_helpe
     session_id = s["session_id"]
 
     st = (await async_client.post(f"/sessions/{session_id}/shuffle")).json()
-    assert st["status"] == "complete"
+    assert st["status"] == "winner_selected"
     assert st["result_watchlist_item_id"] in (i1["id"], i2["id"])
-    assert st["completed_at"] is not None
+    assert st["completed_at"] is None
 
 
 @pytest.mark.anyio
@@ -316,7 +316,7 @@ async def test_collecting_waits_then_transitions_to_swiping(
 
         # A has dealt, B has not: A should see waiting.
         waiting_state = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert waiting_state["status"] == "active"
+        assert waiting_state["status"] == "setup"
         assert waiting_state["phase"] == "waiting"
         assert waiting_state["round"] == 0
 
@@ -454,7 +454,7 @@ async def test_group_leader_can_end_session(async_client, client_factory, user_f
         assert denied.status_code == 403
 
         ended = (await async_client.post(f"/sessions/{session_id}/end")).json()
-        assert ended["status"] == "complete"
+        assert ended["status"] == "cancelled"
         assert ended["ended_by_leader"] is True
 
 
@@ -510,7 +510,7 @@ async def test_group_leader_end_marks_completed_session_ended_for_members(
 
         completed = await async_client.post(f"/sessions/{session_id}/shuffle")
         assert completed.status_code == 200, completed.text
-        assert completed.json()["status"] == "complete"
+        assert completed.json()["status"] == "winner_selected"
         assert completed.json()["ended_by_leader"] is False
 
         ended = await async_client.post(f"/sessions/{session_id}/end")
@@ -519,5 +519,5 @@ async def test_group_leader_end_marks_completed_session_ended_for_members(
 
         member_state = await client_b.get(f"/sessions/{session_id}")
         assert member_state.status_code == 200, member_state.text
-        assert member_state.json()["status"] == "complete"
+        assert member_state.json()["status"] == "cancelled"
         assert member_state.json()["ended_by_leader"] is True

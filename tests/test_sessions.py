@@ -1435,7 +1435,7 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
         assert second["session_id"] == session_id
 
         state_after_deal = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert state_after_deal["status"] == "active"
+        assert state_after_deal["status"] == "setup"
         assert state_after_deal["phase"] in ("collecting", "waiting")
         assert state_after_deal["round"] == 0
 
@@ -1448,7 +1448,7 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
         }
         assert (await async_client.post(f"/groups/{group_id}/sessions", json=confirm_body)).status_code == 201
         state_after_one_confirm = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert state_after_one_confirm["status"] == "active"
+        assert state_after_one_confirm["status"] == "setup"
         assert state_after_one_confirm["phase"] in ("collecting", "waiting")
         assert state_after_one_confirm["round"] == 0
 
@@ -1521,7 +1521,7 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
         assert confirm_response.status_code == 201, confirm_response.text
 
         state_after_confirm = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert state_after_confirm["status"] == "active"
+        assert state_after_confirm["status"] == "setup"
         assert state_after_confirm["round"] == 0
         assert state_after_confirm["user_locked"] is True
 
@@ -1539,7 +1539,7 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
         assert unready_response.json()["session_id"] == session_id
 
         state_after_unready = (await async_client.get(f"/sessions/{session_id}")).json()
-        assert state_after_unready["status"] == "active"
+        assert state_after_unready["status"] == "setup"
         assert state_after_unready["round"] == 0
         assert state_after_unready["phase"] in ("collecting", "waiting")
         assert state_after_unready["user_locked"] is False

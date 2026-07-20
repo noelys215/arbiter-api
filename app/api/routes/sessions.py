@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,6 +13,7 @@ from app.api.http_errors import permission_error, value_error
 from app.api.presenters.titles import build_title_out_with_taxonomy
 from app.models.watchlist_item import WatchlistItem
 from app.models.user import User
+from app.models.tonight_session import TonightSession
 from app.schemas.sessions import (
     CreateSessionRequest,
     CreateSessionResponse,
@@ -21,6 +22,23 @@ from app.schemas.sessions import (
     VoteRequest,
     WatchPartyUpdateRequest,
 )
+from app.schemas.watchlist import TitleOut
+from app.schemas.session_history import (
+    CompletedSessionOut,
+    GroupMovieNightPage,
+    WatchedStatusUpdateRequest,
+)
+from app.services.groups import list_group_member_ids
+from app.services.session_history import (
+    candidate_source_id,
+    complete_session,
+    completed_session_out,
+    get_completed_session,
+    list_group_movie_nights,
+    mark_watch_party_handoff,
+    update_watched_status,
+)
+from app.services.social_realtime import publish_group_update
 from app.schemas.tonight_constraints import TonightConstraints
 from app.services.sessions import (
     cast_vote,
@@ -43,12 +61,34 @@ def _session_value_error(exc: ValueError, *, include_not_found: bool = False):
 
 
 async def _candidate_out(c, *, include_streaming: bool = False) -> SessionCandidateOut:
-    t = c.watchlist_item.title
+    if c.title_name and c.source_title_id:
+        title = TitleOut(
+            id=c.source_title_id,
+            source=c.title_source or "manual",
+            source_id=c.title_source_id,
+            media_type=c.media_type or "movie",
+            name=c.title_name,
+            release_year=c.release_year,
+            poster_path=c.poster_path,
+            overview=c.overview,
+            runtime_minutes=c.runtime_minutes,
+            tmdb_genres=[value for value in (c.genres or []) if isinstance(value, str)],
+        )
+        if include_streaming and c.watchlist_item is not None:
+            title = await build_title_out_with_taxonomy(
+                c.watchlist_item.title, include_streaming=True
+            )
+    elif c.watchlist_item is not None:
+        title = await build_title_out_with_taxonomy(
+            c.watchlist_item.title, include_streaming=include_streaming
+        )
+    else:
+        raise ValueError("Session candidate snapshot is unavailable")
     return SessionCandidateOut(
-        watchlist_item_id=c.watchlist_item_id,
+        watchlist_item_id=candidate_source_id(c),
         position=c.position,
         reason=c.ai_note,
-        title=await build_title_out_with_taxonomy(t, include_streaming=include_streaming),
+        title=title,
     )
 
 
@@ -81,7 +121,7 @@ async def _session_state_response_from_view(view) -> SessionStateResponse:
                 _candidate_out(
                     c,
                     include_streaming=bool(
-                        winner_item_id and c.watchlist_item_id == winner_item_id
+                        winner_item_id and candidate_source_id(c) == winner_item_id
                     ),
                 )
                 for c in candidates
@@ -113,18 +153,9 @@ async def create_session_route(
 
         constraints = TonightConstraints.model_validate(sess.constraints)
 
-        candidates_out: list[SessionCandidateOut] = []
-        for c in sorted(view.candidates, key=lambda row: row.position):
-            wi = c.watchlist_item
-            t = wi.title
-            candidates_out.append(
-                SessionCandidateOut(
-                    watchlist_item_id=wi.id,
-                    position=c.position,
-                    reason=c.ai_note,
-                    title=await build_title_out_with_taxonomy(t),
-                )
-            )
+        candidates_out = await asyncio.gather(
+            *[_candidate_out(c) for c in sorted(view.candidates, key=lambda row: row.position)]
+        )
 
         personal_out: list[SessionCandidateOut] = []
         if personal_preview_ids:
@@ -195,6 +226,144 @@ async def vote_route(
         raise permission_error(e) from e
     except ValueError as e:
         raise _session_value_error(e, include_not_found=True) from e
+
+
+async def _publish_history_update(
+    db: AsyncSession, *, session: TonightSession, reason: str
+) -> None:
+    group_id = session.group_id
+    member_ids = await list_group_member_ids(db, group_id)
+    await session_realtime_hub.broadcast_session_updated(session.id, reason=reason)
+    await publish_group_update(member_ids, reason=reason, group_id=group_id)
+
+
+@router.post(
+    "/sessions/{session_id}/completion",
+    response_model=CompletedSessionOut,
+    status_code=200,
+)
+async def complete_session_route(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        session, changed = await complete_session(
+            db, session_id=session_id, user_id=user.id
+        )
+        await db.commit()
+        await db.refresh(
+            session,
+            attribute_names=["candidates", "participant_snapshots", "vote_snapshots"],
+        )
+        response = completed_session_out(session)
+        if changed:
+            await _publish_history_update(
+                db, session=session, reason="session_completed"
+            )
+        return response
+    except PermissionError as exc:
+        await db.rollback()
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise _session_value_error(exc, include_not_found=True) from exc
+
+
+@router.get(
+    "/sessions/{session_id}/completion", response_model=CompletedSessionOut
+)
+async def completed_session_route(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        session = await get_completed_session(
+            db, session_id=session_id, user_id=user.id
+        )
+        return completed_session_out(session)
+    except PermissionError as exc:
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        raise _session_value_error(exc, include_not_found=True) from exc
+
+
+@router.patch(
+    "/sessions/{session_id}/completion/watched",
+    response_model=CompletedSessionOut,
+)
+async def update_watched_status_route(
+    session_id: UUID,
+    payload: WatchedStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        session, changed = await update_watched_status(
+            db,
+            session_id=session_id,
+            user_id=user.id,
+            watched_status=payload.status,
+        )
+        await db.commit()
+        response = completed_session_out(session)
+        if changed:
+            await _publish_history_update(
+                db, session=session, reason="session_history_updated"
+            )
+        return response
+    except PermissionError as exc:
+        await db.rollback()
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise _session_value_error(exc, include_not_found=True) from exc
+
+
+@router.post("/sessions/{session_id}/watch-party/handoff", status_code=204)
+async def mark_watch_party_handoff_route(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        _, changed = await mark_watch_party_handoff(
+            db, session_id=session_id, user_id=user.id
+        )
+        await db.commit()
+        if changed:
+            await session_realtime_hub.broadcast_session_updated(
+                session_id, reason="watch_party_handoff"
+            )
+    except PermissionError as exc:
+        await db.rollback()
+        raise permission_error(exc) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise _session_value_error(exc, include_not_found=True) from exc
+
+
+@router.get(
+    "/groups/{group_id}/movie-nights", response_model=GroupMovieNightPage
+)
+async def group_movie_nights_route(
+    group_id: UUID,
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        return await list_group_movie_nights(
+            db,
+            group_id=group_id,
+            user_id=user.id,
+            limit=limit,
+            cursor=cursor,
+        )
+    except PermissionError as exc:
+        raise permission_error(exc) from exc
 
 
 @router.delete("/sessions/{session_id}/vote/{watchlist_item_id}", status_code=200)

@@ -84,6 +84,7 @@ class TonightSession(Base):
     candidates = relationship(
         "TonightSessionCandidate",
         back_populates="session",
+        foreign_keys="TonightSessionCandidate.session_id",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="TonightSessionCandidate.position",
@@ -91,6 +92,51 @@ class TonightSession(Base):
 
     status: Mapped[str] = mapped_column(sa.String(20), nullable=False, server_default="active")
     completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    winner_selected_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    group_name_snapshot: Mapped[str | None] = mapped_column(
+        sa.String(120), nullable=True
+    )
+    criteria_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    winner_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey(
+            "tonight_session_candidates.id",
+            name="tonight_sessions_winner_candidate_id_fkey",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    decision_duration_seconds: Mapped[int | None] = mapped_column(
+        sa.Integer, nullable=True
+    )
+    winner_unanimous: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
+    had_tie: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
+    tie_resolution: Mapped[str | None] = mapped_column(sa.String(30), nullable=True)
+    watched_status: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default="unconfirmed"
+    )
+    watched_confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    watched_confirmed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    teleparty_shared_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    teleparty_handoff_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
     result_watchlist_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -117,3 +163,40 @@ class TonightSession(Base):
     )
 
     votes = relationship("TonightVote", back_populates="session")
+    participant_snapshots = relationship(
+        "TonightSessionParticipant",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    vote_snapshots = relationship(
+        "TonightSessionVoteSnapshot",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('setup','active','winner_selected','completed','cancelled','complete')",
+            name="ck_tonight_sessions_status",
+        ),
+        sa.CheckConstraint(
+            "watched_status IN ('unconfirmed','watched','not_watched')",
+            name="ck_tonight_sessions_watched_status",
+        ),
+        sa.Index(
+            "ix_tonight_sessions_group_completed",
+            "group_id",
+            "completed_at",
+        ),
+        sa.Index(
+            "uq_tonight_sessions_open_group",
+            "group_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "status IN ('setup','active','winner_selected')"
+            ),
+            sqlite_where=sa.text("status IN ('setup','active','winner_selected')"),
+        ),
+    )
