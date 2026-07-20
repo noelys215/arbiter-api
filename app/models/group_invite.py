@@ -33,8 +33,19 @@ class GroupInvite(Base):
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
 
     __table_args__ = (
-        sa.CheckConstraint("max_uses >= 1", name="ck_group_invites_max_uses"),
-        sa.CheckConstraint("uses_count >= 0", name="ck_group_invites_uses_count"),
+        sa.CheckConstraint("max_uses = 1", name="ck_group_invites_single_use"),
+        sa.CheckConstraint(
+            "uses_count >= 0 AND uses_count <= 1",
+            name="ck_group_invites_uses_count",
+        ),
+        sa.Index(
+            "uq_group_invites_pending_target",
+            "group_id",
+            "target_user_id",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL AND uses_count = 0"),
+            sqlite_where=sa.text("revoked_at IS NULL AND uses_count = 0"),
+        ),
     )
 
     group = relationship("Group", back_populates="invites")

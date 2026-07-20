@@ -66,11 +66,11 @@ async def create_friendship(
     assert r.json().get("ok") is True
 
 
-async def create_group(client, *, token_owner: str, name: str, member_user_ids: list[str]) -> str:
+async def create_group(client, *, token_owner: str, name: str) -> str:
     act_as_token(client, token_owner)
     r = await client.post(
         "/groups",
-        json={"name": name, "member_user_ids": member_user_ids},
+        json={"name": name},
     )
     assert r.status_code in (200, 201), r.text
     data = r.json()
@@ -125,8 +125,11 @@ async def test_groups_full_flow_owner_member_invite_accept(client):
         client, token_a=token_a, token_b=token_b, recipient_email=b_email
     )
 
-    # A creates group with B as initial member
-    group_id = await create_group(client, token_owner=token_a, name="Movie Night", member_user_ids=[b_id])
+    group_id = await create_group(client, token_owner=token_a, name="Movie Night")
+    b_invite_id = await create_group_invitation(
+        client, token_owner=token_a, group_id=group_id, target_user_id=b_id
+    )
+    await accept_group_invitation(client, token_user=token_b, invite_id=b_invite_id)
     assert group_id
 
     # A lists groups: should include the group
@@ -204,7 +207,11 @@ async def test_group_detail_requires_membership(client):
         client, token_a=token_a, token_b=token_b, recipient_email=b_email
     )
 
-    group_id = await create_group(client, token_owner=token_a, name="Private Group", member_user_ids=[b_id])
+    group_id = await create_group(client, token_owner=token_a, name="Private Group")
+    b_invite_id = await create_group_invitation(
+        client, token_owner=token_a, group_id=group_id, target_user_id=b_id
+    )
+    await accept_group_invitation(client, token_user=token_b, invite_id=b_invite_id)
 
     # X is NOT a member; should be blocked
     act_as_token(client, token_x)
@@ -232,7 +239,11 @@ async def test_only_owner_can_create_group_invitation(client):
         client, token_a=token_a, token_b=token_b, recipient_email=b_email
     )
 
-    group_id = await create_group(client, token_owner=token_a, name="Owner Only Invites", member_user_ids=[b_id])
+    group_id = await create_group(client, token_owner=token_a, name="Owner Only Invites")
+    b_invite_id = await create_group_invitation(
+        client, token_owner=token_a, group_id=group_id, target_user_id=b_id
+    )
+    await accept_group_invitation(client, token_user=token_b, invite_id=b_invite_id)
 
     # B is a member but not owner; should be blocked from invite generation
     act_as_token(client, token_b)

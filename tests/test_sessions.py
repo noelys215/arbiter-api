@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from social_helpers import (
+    add_friend_to_group,
     add_friend_to_group_with_tokens,
     create_friendship,
     create_friendship_with_tokens,
@@ -14,7 +15,7 @@ async def test_create_session_requires_membership(async_client, user_factory, lo
     # User A creates group
     user_a = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user_a["email"], password=user_a["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -51,7 +52,7 @@ async def test_group_leader_can_set_watch_party_link_and_members_can_read(
     leader_token = await login_helper(
         async_client, email=leader["email"], password=leader["password"]
     )
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     member = await user_factory(async_client, display_name="Member")
@@ -141,7 +142,7 @@ async def test_non_leader_cannot_set_watch_party_link(
     leader_token = await login_helper(
         async_client, email=leader["email"], password=leader["password"]
     )
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     member = await user_factory(async_client, display_name="Member")
@@ -223,7 +224,7 @@ async def test_group_leader_can_set_non_join_teleparty_link(
     leader_token = await login_helper(
         async_client, email=leader["email"], password=leader["password"]
     )
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     member = await user_factory(async_client, display_name="Member")
@@ -321,7 +322,7 @@ async def test_create_session_freezes_deck_and_returns_order(async_client, monke
     # user
     user = await user_factory(async_client, display_name="U")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -374,7 +375,7 @@ async def test_create_session_freezes_deck_and_returns_order(async_client, monke
 async def test_session_pool_excludes_watched_and_snoozed(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="P")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -419,7 +420,7 @@ async def test_session_pool_excludes_watched_and_snoozed(async_client, user_fact
 async def test_hard_filter_format_movie(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="F")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -472,7 +473,7 @@ async def test_free_text_anime_only_strictly_filters_deck(
 
     user = await user_factory(async_client, display_name="AnimeFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     anime_item = (
@@ -530,7 +531,7 @@ async def test_free_text_actor_filter_restricts_to_requested_person(
 
     user = await user_factory(async_client, display_name="ActorFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     gordon_item = (
@@ -588,7 +589,7 @@ async def test_free_text_studio_filter_restricts_to_requested_company(
 
     user = await user_factory(async_client, display_name="StudioFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     a24_item = (
@@ -653,7 +654,7 @@ async def test_free_text_studio_filter_uses_web_distributor_evidence(
 
     user = await user_factory(async_client, display_name="StudioWebEvidence")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     midsommar_item = (
@@ -711,7 +712,7 @@ async def test_free_text_similarity_phrase_relaxes_strict_studio_and_anime_filte
 
     user = await user_factory(async_client, display_name="StudioSimilarity")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     ghibli_item = (
@@ -784,7 +785,7 @@ async def test_free_text_happy_alias_maps_to_feel_good_mood(
 
     user = await user_factory(async_client, display_name="MoodAlias")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     happy_item = (
@@ -866,7 +867,7 @@ async def test_ai_rerank_payload_includes_tmdb_metadata(
 
     user = await user_factory(async_client, display_name="AIRerankMetadata")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     await async_client.post(
@@ -928,7 +929,7 @@ async def test_free_text_directed_by_filter_restricts_to_requested_person(
 
     user = await user_factory(async_client, display_name="DirectorFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     nolan_item = (
@@ -997,7 +998,7 @@ async def test_free_text_locale_genre_and_exclusion_filters(
 
     user = await user_factory(async_client, display_name="LocaleGenreFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     korean_drama = (
@@ -1052,7 +1053,7 @@ async def test_free_text_year_and_format_filters(
 
     user = await user_factory(async_client, display_name="YearFilter")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     old_show = (
@@ -1112,7 +1113,7 @@ async def test_mood_tags_use_synonyms_and_tmdb_taxonomy(async_client, monkeypatc
 
     user = await user_factory(async_client, display_name="Mood")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = (
@@ -1163,7 +1164,7 @@ async def test_mood_matching_falls_back_when_no_taxonomy_hits(async_client, monk
 
     user = await user_factory(async_client, display_name="Fallback")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = (
@@ -1218,7 +1219,7 @@ async def test_mood_tags_match_from_tmdb_genre_ids(async_client, monkeypatch, us
 
     user = await user_factory(async_client, display_name="GenreID")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = (
@@ -1274,7 +1275,7 @@ async def test_real_tmdb_genre_tag_science_fiction_is_supported(
 
     user = await user_factory(async_client, display_name="TMDBGenre")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = (
@@ -1340,7 +1341,7 @@ async def test_runtime_vibe_tag_under_30_prefers_short_tv_titles(
 
     user = await user_factory(async_client, display_name="RuntimeTag")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     short_tv = (
@@ -1402,8 +1403,14 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client,
+            client_b,
+            group_id=group_id,
+            target_user_id=b_id,
+        )
 
         await async_client.post(
             f"/groups/{group_id}/watchlist",
@@ -1472,8 +1479,14 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client,
+            client_b,
+            group_id=group_id,
+            target_user_id=b_id,
+        )
 
         await async_client.post(
             f"/groups/{group_id}/watchlist",

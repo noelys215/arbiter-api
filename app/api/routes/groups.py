@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import permission_error, value_error
+from app.api.social_rate_limits import enforce_social_rate_limit
 from app.api.presenters.users import public_user_from_user
 from app.models.user import User
 from app.schemas.groups import (
@@ -17,8 +18,7 @@ from app.schemas.groups import (
     GroupInviteCreateResponse,
     LeaveGroupResponse,
     DeleteGroupResponse,
-    AddGroupMembersRequest,
-    AddGroupMembersResponse,
+    TransferGroupOwnershipRequest,
 )
 from app.services.groups import (
     create_group,
@@ -27,8 +27,8 @@ from app.services.groups import (
     create_group_invitation,
     leave_group,
     delete_group,
-    add_group_members,
     list_group_member_ids,
+    transfer_group_ownership,
     update_group_name,
 )
 from app.services.social_realtime import (
@@ -48,7 +48,7 @@ async def create_group_route(
     user: User = Depends(get_current_user),
 ):
     try:
-        g = await create_group(db, user.id, payload.name, payload.member_user_ids)
+        g = await create_group(db, user.id, payload.name)
         member_ids = await list_group_member_ids(db, g.id)
         await publish_group_update(
             member_ids,
@@ -61,7 +61,7 @@ async def create_group_route(
             name=g.name,
             owner_id=g.owner_id,
             created_at=g.created_at,
-            member_count=1 + len({uid for uid in payload.member_user_ids if uid != user.id}),
+            member_count=1,
         )
     except ValueError as e:
         raise value_error(e) from e
@@ -143,11 +143,13 @@ async def update_group_route(
 )
 async def create_group_invitation_route(
     group_id: UUID,
+    request: Request,
     payload: CreateGroupInviteRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
+        await enforce_social_rate_limit(request, user=user, action="group_invite")
         invite = await create_group_invitation(
             db,
             group_id=group_id,
@@ -178,6 +180,7 @@ async def create_group_invitation_route(
                 "target_not_friend": 400,
                 "already_member": 409,
                 "invite_already_pending": 409,
+                "target_unavailable": 400,
             },
             default_detail="Could not create invitation",
         ) from exc
@@ -244,30 +247,35 @@ async def delete_group_route(
         ) from e
 
 
-@router.post("/{group_id}/members", response_model=AddGroupMembersResponse, status_code=200)
-async def add_group_members_route(
+@router.post("/{group_id}/transfer-ownership", response_model=GroupListItem)
+async def transfer_group_ownership_route(
     group_id: UUID,
-    payload: AddGroupMembersRequest,
+    payload: TransferGroupOwnershipRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
-        added, skipped = await add_group_members(
+        result = await transfer_group_ownership(
             db,
             group_id=group_id,
-            owner_id=user.id,
-            member_user_ids=payload.member_user_ids,
+            current_owner_id=user.id,
+            new_owner_id=payload.new_owner_user_id,
         )
-        member_ids = await list_group_member_ids(db, group_id)
         await db.commit()
-        for added_user_id in added:
-            await publish_group_update(
-                member_ids,
-                reason="membership_created",
-                group_id=group_id,
-                member_user_id=added_user_id,
-            )
-        return AddGroupMembersResponse(ok=True, added_user_ids=added, skipped_user_ids=skipped)
+        await db.refresh(result.group)
+        await publish_group_update(
+            result.member_user_ids,
+            reason="ownership_transferred",
+            group_id=group_id,
+            member_user_id=payload.new_owner_user_id,
+        )
+        return GroupListItem(
+            id=result.group.id,
+            name=result.group.name,
+            owner_id=result.group.owner_id,
+            created_at=result.group.created_at,
+            member_count=len(result.member_user_ids),
+        )
     except PermissionError as e:
         await db.rollback()
         raise permission_error(e) from e
@@ -275,6 +283,14 @@ async def add_group_members_route(
         await db.rollback()
         raise value_error(
             e,
-            code_statuses={"not_found": 404},
-            detail_overrides={"not_found": "Group not found"},
+            code_statuses={
+                "not_found": 404,
+                "already_owner": 409,
+                "new_owner_not_member": 400,
+            },
+            detail_overrides={
+                "not_found": "Group not found",
+                "already_owner": "That person already owns this group.",
+                "new_owner_not_member": "The new owner must already be a group member.",
+            },
         ) from e

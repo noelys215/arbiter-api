@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from uuid import UUID
 from typing import List, Literal
 from app.schemas.users import AvatarFields, InvitePublicUser
 
 
 class CreateGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=120)
-    member_user_ids: List[UUID] = Field(default_factory=list)  # friends to add (excluding owner is allowed)
 
     @field_validator("name")
     @classmethod
@@ -93,11 +94,5 @@ class DeleteGroupResponse(BaseModel):
     ok: bool
 
 
-class AddGroupMembersRequest(BaseModel):
-    member_user_ids: List[UUID] = Field(default_factory=list)
-
-
-class AddGroupMembersResponse(BaseModel):
-    ok: bool
-    added_user_ids: List[UUID]
-    skipped_user_ids: List[UUID]
+class TransferGroupOwnershipRequest(BaseModel):
+    new_owner_user_id: UUID

@@ -65,7 +65,7 @@ class FeedbackRateLimitDecision:
 _redis_client: Redis | None = None
 
 
-def _redis() -> Redis | None:
+def get_rate_limit_redis() -> Redis | None:
     global _redis_client
     url = (settings.rate_limit_redis_url or "").strip()
     if not url:
@@ -88,7 +88,7 @@ async def close_feedback_rate_limiter() -> None:
         _redis_client = None
 
 
-def _opaque_identifier(kind: str, value: str) -> str:
+def opaque_rate_limit_identifier(kind: str, value: str) -> str:
     digest = hmac.new(
         settings.jwt_secret.encode("utf-8"),
         f"feedback:{kind}:{value}".encode("utf-8"),
@@ -97,7 +97,7 @@ def _opaque_identifier(kind: str, value: str) -> str:
     return digest
 
 
-def _client_ip(request: Request) -> str:
+def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
     candidate = forwarded.rsplit(",", 1)[-1].strip() if forwarded else ""
     if not candidate and request.client is not None:
@@ -109,10 +109,10 @@ def _client_ip(request: Request) -> str:
 
 
 def _rate_keys(request: Request, user: User | None) -> list[tuple[str, int]]:
-    ip_key = _opaque_identifier("ip", _client_ip(request))
+    ip_key = opaque_rate_limit_identifier("ip", client_ip(request))
     if user is None:
         return [(f"feedback:rate:public:{ip_key}", PUBLIC_LIMIT)]
-    user_key = _opaque_identifier("user", str(user.id))
+    user_key = opaque_rate_limit_identifier("user", str(user.id))
     return [
         (f"feedback:rate:user:{user_key}", AUTHENTICATED_LIMIT),
         (f"feedback:rate:authenticated-ip:{ip_key}", AUTHENTICATED_IP_LIMIT),
@@ -125,7 +125,7 @@ async def check_feedback_rate_limit(
     user: User | None,
     submission_id: UUID,
 ) -> FeedbackRateLimitDecision:
-    client = _redis()
+    client = get_rate_limit_redis()
     if client is None:
         if settings.is_local_env():
             return FeedbackRateLimitDecision(allowed=True)
@@ -134,7 +134,7 @@ async def check_feedback_rate_limit(
     rate_keys = _rate_keys(request, user)
     submission_key = (
         "feedback:submission:"
-        f"{_opaque_identifier('submission', str(submission_id))}"
+        f"{opaque_rate_limit_identifier('submission', str(submission_id))}"
     )
     keys = [submission_key, *(key for key, _ in rate_keys)]
     arguments = [

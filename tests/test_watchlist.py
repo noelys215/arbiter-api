@@ -36,7 +36,7 @@ async def test_watchlist_membership_required(async_client, user_factory, login_h
     # A creates group
     user_a = await user_factory(async_client, display_name="A1")
     await login_helper(async_client, email=user_a["email"], password=user_a["password"])
-    r = await async_client.post("/groups", json={"name": "Solo", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "Solo"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -71,7 +71,7 @@ async def test_watchlist_tmdb_add_and_duplicate_returns_existing(
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -122,7 +122,7 @@ async def test_watchlist_tmdb_add_populates_runtime_and_overview(async_client, m
 
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+    group_id = (await async_client.post("/groups", json={"name": "G"})).json()["id"]
 
     payload = {
         "type": "tmdb",
@@ -155,8 +155,8 @@ async def test_watchlist_tmdb_add_backfills_runtime_for_existing_title(async_cli
 
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group_1 = (await async_client.post("/groups", json={"name": "G1", "member_user_ids": []})).json()["id"]
-    group_2 = (await async_client.post("/groups", json={"name": "G2", "member_user_ids": []})).json()["id"]
+    group_1 = (await async_client.post("/groups", json={"name": "G1"})).json()["id"]
+    group_2 = (await async_client.post("/groups", json={"name": "G2"})).json()["id"]
 
     payload = {
         "type": "tmdb",
@@ -186,7 +186,7 @@ async def test_watchlist_manual_add(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -206,7 +206,7 @@ async def test_tonight_filter_excludes_watched_and_snoozed(async_client, user_fa
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -251,7 +251,7 @@ async def test_unsnooze_brings_item_back(async_client, user_factory, login_helpe
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -282,7 +282,7 @@ async def test_remove_deletes_item(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -308,7 +308,7 @@ async def test_tonight_filter_includes_when_snooze_expired(async_client, user_fa
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -335,7 +335,7 @@ async def test_patch_empty_body_rejected(async_client, user_factory, login_helpe
     user = await user_factory(async_client, display_name="A")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -356,7 +356,7 @@ async def test_watchlist_paginated_query_and_load_more(async_client, user_factor
     user = await user_factory(async_client, display_name="Pager")
     await login_helper(async_client, email=user["email"], password=user["password"])
 
-    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+    group_id = (await async_client.post("/groups", json={"name": "G"})).json()["id"]
 
     for title in ["Zulu", "Alpha", "Bravo"]:
         r = await async_client.post(
@@ -425,7 +425,7 @@ async def test_watchlist_paginated_genre_filter(async_client, monkeypatch, user_
 
     user = await user_factory(async_client, display_name="Genre")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group_id = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()["id"]
+    group_id = (await async_client.post("/groups", json={"name": "G"})).json()["id"]
 
     sci = await async_client.post(
         f"/groups/{group_id}/watchlist",

@@ -132,3 +132,72 @@ async def test_legacy_invitation_routes_are_removed(client):
     assert (await client.get("/invites/group/old-token")).status_code == 404
     assert (await client.post("/groups/00000000-0000-0000-0000-000000000000/invite")).status_code == 404
     assert (await client.post("/groups/accept-invite", json={"code": "old"})).status_code in {404, 405}
+
+
+async def test_direct_membership_addition_is_removed(
+    client, user_factory, login_helper
+):
+    owner = await user_factory(client, display_name="Owner")
+    member = await user_factory(client, display_name="Member")
+    await login_helper(client, email=owner["email"], password=owner["password"])
+
+    rejected_create = await client.post(
+        "/groups",
+        json={"name": "No Bypass", "member_user_ids": [member["id"]]},
+    )
+    assert rejected_create.status_code == 422
+
+    group = (await client.post("/groups", json={"name": "No Bypass"})).json()
+    direct_add = await client.post(
+        f"/groups/{group['id']}/members",
+        json={"member_user_ids": [member["id"]]},
+    )
+    assert direct_add.status_code == 404
+
+
+async def test_owner_can_transfer_group_to_an_existing_member(
+    client, client_factory, user_factory, login_helper
+):
+    owner, member, member_token = await _users(
+        client, client_factory, user_factory, login_helper
+    )
+    async with client_factory() as member_client:
+        member_client.cookies.set("access_token", member_token)
+        await create_friendship(
+            client,
+            member_client,
+            recipient_email=member["email"],
+        )
+        group = (await client.post("/groups", json={"name": "Hand Off"})).json()
+        await add_friend_to_group(
+            client,
+            member_client,
+            group_id=group["id"],
+            target_user_id=member["id"],
+        )
+
+        transferred = await client.post(
+            f"/groups/{group['id']}/transfer-ownership",
+            json={"new_owner_user_id": member["id"]},
+        )
+        assert transferred.status_code == 200, transferred.text
+        assert transferred.json()["owner_id"] == member["id"]
+
+        former_owner_leave = await client.post(f"/groups/{group['id']}/leave")
+        assert former_owner_leave.status_code == 200
+        assert (await member_client.get(f"/groups/{group['id']}")).status_code == 200
+
+
+async def test_ownership_transfer_requires_a_current_member(
+    client, user_factory, login_helper
+):
+    owner = await user_factory(client, display_name="Owner")
+    outsider = await user_factory(client, display_name="Outsider")
+    await login_helper(client, email=owner["email"], password=owner["password"])
+    group = (await client.post("/groups", json={"name": "Private"})).json()
+
+    response = await client.post(
+        f"/groups/{group['id']}/transfer-ownership",
+        json={"new_owner_user_id": outsider["id"]},
+    )
+    assert response.status_code == 400

@@ -141,14 +141,22 @@ Friendships are account-level and independent of groups.
 
 Requests are targeted, expire after their TTL, and are delivered through the
 authenticated account inbox and WebSocket updates. Arbiter does not issue
-public friendship links or codes.
+public friendship links or codes. Email lookup returns an opaque success for
+privacy; a missing public username returns a correction-friendly not-found
+message. Blocking removes an existing friendship and closes pending social
+invitations, but it does not remove either person from shared groups.
+
+- `GET /friends/blocked` lists accounts the current user blocked.
+- `POST /friends/{user_id}/block` blocks an account.
+- `DELETE /friends/{user_id}/block` unblocks an account.
 
 ### Groups
 
-Groups are owned by a user and have members. Creation requires all added members to already be friends with the owner.
+Groups are owned by a user and have members. Creating a group adds only its
+owner. Other members join by accepting a targeted invitation from a friend.
 
 - `POST /groups`
-  - Create group and set memberships (owner + invited friend IDs).
+  - Create a group with the current user as its owner and first member.
 - `GET /groups`
   - List all groups the user belongs to.
 - `GET /groups/{group_id}`
@@ -157,6 +165,11 @@ Groups are owned by a user and have members. Creation requires all added members
   - Owner sends a targeted invitation to an existing friend.
 - `POST /group-invites/{invite_id}/decision`
   - Target account explicitly accepts or declines the invitation.
+- `POST /groups/{group_id}/transfer-ownership`
+  - Owner transfers control to an existing member and remains a member.
+
+The legacy direct-add membership endpoint is intentionally unavailable. Group
+ownership must be transferred before an owner can leave.
 
 ### Watchlist
 
@@ -252,7 +265,7 @@ Common optional vars:
 - `FEEDBACK_FROM_EMAIL` (verified Resend sender)
 - `FEEDBACK_PUBLIC_ENABLED` (default `false`; enable only after production-safe rate limiting is configured)
 - `FEEDBACK_AUTHENTICATED_ENABLED` (default `false`; explicit acceptance of authenticated-endpoint abuse risk)
-- `RATE_LIMIT_REDIS_URL` (private Render Key Value URL used by the feedback limiter)
+- `RATE_LIMIT_REDIS_URL` (private Render Key Value URL shared by feedback and social-mutation limiters)
 - `MAGIC_LINK_VERIFY_URL` (production default `https://www.arbitertv.com/auth/magic-link/verify`; local runs use `http://localhost:8000/auth/magic-link/verify`)
 - `MAGIC_LINK_EXPIRE_MINUTES` (default `15`)
 - `LOCAL_AUTH_BYPASS_TOKEN`: local/test-only token for `POST /auth/local-bypass`; never set this in production
@@ -268,11 +281,11 @@ Common optional vars:
 
 Use the included `render.yaml` blueprint in the repo root.
 
-Production deployments must rate-limit invitation creation at the platform or
-edge layer. Apply limits to authenticated friend- and group-invite creation
-routes without logging request bodies or raw invite tokens. The application
-enforces authorization, expiry, revocation, and use limits, but does not ship an
-in-process rate limiter.
+Authenticated social mutations use the shared Redis-compatible service from
+`RATE_LIMIT_REDIS_URL`. Friend requests are limited to 10 per account and 30
+per IP per hour. Group invitations are limited to 30 per account and 60 per IP
+per hour. Production requests fail closed if the limiter is unavailable;
+local/test environments bypass the limiter when Redis is not configured.
 
 `POST /feedback` uses the shared Redis-compatible service configured through
 `RATE_LIMIT_REDIS_URL`. Signed-out visitors are limited to 3 submissions per 15
@@ -312,6 +325,22 @@ Notes:
   not configure additional workers. Before adding workers, horizontal scaling,
   or overlapping service instances, move realtime fan-out to a shared broker
   such as Redis pub/sub so events reach sockets connected to every process.
+
+### Social-invitation retention
+
+Expired, accepted, declined, or cancelled social invitations are retained for
+30 days for short-term operational troubleshooting, then deleted by:
+
+```bash
+make cleanup-social-invites
+```
+
+Configure a Render Cron Job to run this command daily (for example,
+`15 4 * * *`, which Render evaluates in UTC). Give it the same repository,
+Python build command, root directory, and `DATABASE_URL` as the API. The command
+is idempotent and exits after cleanup. Render Cron Jobs have a minimum monthly
+charge, so this job is documented rather than silently provisioned by the
+Blueprint.
 
 ## Running tests
 
@@ -419,9 +448,8 @@ sequenceDiagram
   participant API
   participant DB
 
-  Owner->>API: POST /groups {member_user_ids}
-  API->>DB: validate friendships
-  API->>DB: INSERT group + memberships
+  Owner->>API: POST /groups {name}
+  API->>DB: INSERT group + owner membership
   API-->>Owner: 201 group
 
   Owner->>API: POST /groups/{id}/invites {target_user_id}
@@ -480,17 +508,25 @@ curl -i -b cookies.txt http://127.0.0.1:8000/me
 # A sends a request to B's account
 curl -i -b cookies.txt -X POST http://127.0.0.1:8000/friends/requests \
   -H 'Content-Type: application/json' \
-  -d '{"email":"b@example.com"}'
+  -d '{"identifier":"b@example.com"}'
 
 # B accepts the request from the account inbox
 curl -i -b cookies_b.txt -X POST http://127.0.0.1:8000/friends/requests/<REQUEST_ID>/decision \
   -H 'Content-Type: application/json' \
   -d '{"decision":"accept"}'
 
-# A creates group with B
+# A creates a group, then invites B
 curl -i -b cookies.txt -X POST http://127.0.0.1:8000/groups \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Movie Night","member_user_ids":["<B_USER_ID>"]}'
+  -d '{"name":"Movie Night"}'
+
+curl -i -b cookies.txt -X POST http://127.0.0.1:8000/groups/<GROUP_ID>/invites \
+  -H 'Content-Type: application/json' \
+  -d '{"target_user_id":"<B_USER_ID>"}'
+
+curl -i -b cookies_b.txt -X POST http://127.0.0.1:8000/group-invites/<INVITE_ID>/decision \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"accept"}'
 ```
 
 ### Watchlist + tonight session

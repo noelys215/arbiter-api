@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -9,6 +9,8 @@ from app.api.presenters.users import invite_user_from_user, public_user_from_use
 from app.models.user import User
 from app.schemas.friends import (
     FriendListItem,
+    BlockedUserListItem,
+    BlockUserResponse,
     FriendRequestCreate,
     FriendRequestCreateResponse,
     FriendRequestDecision,
@@ -18,6 +20,7 @@ from app.schemas.friends import (
     UnfriendRequest,
     UnfriendResponse,
 )
+from app.services.blocks import block_user, list_blocked_users, unblock_user
 from app.services.friends import (
     cancel_friend_request,
     create_friend_request,
@@ -27,9 +30,11 @@ from app.services.friends import (
     unfriend,
 )
 from app.services.social_realtime import (
+    publish_group_invite_update,
     publish_friend_request_update,
     publish_friendship_update,
 )
+from app.api.social_rate_limits import enforce_social_rate_limit
 from uuid import UUID
 
 router = APIRouter(prefix="/friends", tags=["friends"])
@@ -41,11 +46,15 @@ router = APIRouter(prefix="/friends", tags=["friends"])
     status_code=201,
 )
 async def send_friend_request(
+    request: Request,
     payload: FriendRequestCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
+        await enforce_social_rate_limit(
+            request, user=user, action="friend_request"
+        )
         result = await create_friend_request(db, user.id, payload.identifier)
         await db.commit()
         if result.changed and result.target_user_id is not None:
@@ -62,11 +71,13 @@ async def send_friend_request(
                 "cannot_friend_self": 400,
                 "already_friends": 409,
                 "request_already_pending": 409,
+                "account_not_found": 404,
             },
             detail_overrides={
                 "cannot_friend_self": "You cannot send a friend request to yourself.",
                 "already_friends": "You are already friends.",
                 "request_already_pending": "A friend request is already pending between you.",
+                "account_not_found": "No Arbiter account uses that username.",
             },
             default_detail="Could not send friend request",
         ) from exc
@@ -231,3 +242,71 @@ async def unfriend_route(
             },
             default_detail="Could not unfriend user",
         ) from e
+
+
+@router.get("/blocked", response_model=list[BlockedUserListItem])
+async def get_blocked_users(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    rows = await list_blocked_users(db, user.id)
+    return [
+        BlockedUserListItem(
+            **invite_user_from_user(blocked_user),
+            blocked_at=block.created_at,
+        )
+        for block, blocked_user in rows
+    ]
+
+
+@router.post("/{user_id}/block", response_model=BlockUserResponse)
+async def block_user_route(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        result = await block_user(db, user.id, user_id)
+        await db.commit()
+        if result.changed:
+            recipients = [user.id, result.target_user_id]
+            if result.friendship_removed:
+                await publish_friendship_update(
+                    recipients, reason="friendship_removed"
+                )
+            if result.friend_requests_closed:
+                await publish_friend_request_update(
+                    recipients, reason="request_cancelled"
+                )
+            for group_id in result.affected_group_ids:
+                await publish_group_invite_update(
+                    recipients,
+                    reason="invite_revoked",
+                    group_id=group_id,
+                )
+        return BlockUserResponse(already_blocked=not result.changed)
+    except ValueError as exc:
+        await db.rollback()
+        raise value_error(
+            exc,
+            code_statuses={"cannot_block_self": 400, "user_not_found": 404},
+            detail_overrides={
+                "cannot_block_self": "You cannot block yourself.",
+                "user_not_found": "User not found.",
+            },
+        ) from exc
+
+
+@router.delete("/{user_id}/block", response_model=BlockUserResponse)
+async def unblock_user_route(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    changed = await unblock_user(db, user.id, user_id)
+    await db.commit()
+    if changed:
+        await publish_friendship_update(
+            [user.id, user_id], reason="block_removed"
+        )
+    return BlockUserResponse(already_blocked=False)

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import pytest
 
-from social_helpers import create_friendship
+from social_helpers import add_friend_to_group, create_friendship
 from sqlalchemy import select
 
 from app.db.session import AsyncSessionLocal
@@ -14,7 +14,7 @@ async def test_vote_upserts_and_is_blind(async_client, user_factory, login_helpe
     # user
     user = await user_factory(async_client, display_name="V1")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -79,7 +79,7 @@ async def test_user_can_undo_vote_before_round_completes(
 
     user = await user_factory(async_client, display_name="Undo")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
     for tmdb_id, title in ((901, "A"), (902, "B")):
         await async_client.post(
@@ -146,10 +146,16 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
         c_id = next(f["id"] for f in friends if f["email"] == user_c["email"])
 
-        r = await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id, c_id]})
+        r = await async_client.post("/groups", json={"name": "G"})
         assert r.status_code in (200, 201), r.text
         g = r.json()
         group_id = g["id"]
+        await add_friend_to_group(
+            async_client, client_b, group_id=group_id, target_user_id=b_id
+        )
+        await add_friend_to_group(
+            async_client, client_c, group_id=group_id, target_user_id=c_id
+        )
 
         r = await async_client.post(
             f"/groups/{group_id}/watchlist",
@@ -233,7 +239,7 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
 async def test_shuffle_completes_session(async_client, user_factory, login_helper):
     user = await user_factory(async_client, display_name="S")
     await login_helper(async_client, email=user["email"], password=user["password"])
-    r = await async_client.post("/groups", json={"name": "G", "member_user_ids": []})
+    r = await async_client.post("/groups", json={"name": "G"})
     assert r.status_code in (200, 201), r.text
     g = r.json()
     group_id = g["id"]
@@ -281,8 +287,11 @@ async def test_collecting_waits_then_transitions_to_swiping(
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client, client_b, group_id=group_id, target_user_id=b_id
+        )
 
         i1 = (
             await async_client.post(
@@ -341,8 +350,11 @@ async def test_timer_lock_prevents_late_vote(async_client, client_factory, user_
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client, client_b, group_id=group_id, target_user_id=b_id
+        )
 
         i1 = (
             await async_client.post(
@@ -416,8 +428,11 @@ async def test_group_leader_can_end_session(async_client, client_factory, user_f
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client, client_b, group_id=group_id, target_user_id=b_id
+        )
         await async_client.post(
             f"/groups/{group_id}/watchlist",
             json={"type": "tmdb", "tmdb_id": 801, "media_type": "movie", "title": "A", "year": 2000, "poster_path": None},
@@ -462,8 +477,11 @@ async def test_group_leader_end_marks_completed_session_ended_for_members(
         friends = (await async_client.get("/friends")).json()
         b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
 
-        group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": [b_id]})).json()
+        group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
+        await add_friend_to_group(
+            async_client, client_b, group_id=group_id, target_user_id=b_id
+        )
         for tmdb_id, title in ((811, "A"), (812, "B")):
             await async_client.post(
                 f"/groups/{group_id}/watchlist",

@@ -56,7 +56,7 @@ async def test_session_create_ai_parse_applies_constraints_and_marks_ai_used_fal
     username = _u("a")
     await _register_and_login(async_client, user_factory, login_helper, email=email, username=username)
 
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     movie_ok = await _add_tmdb_item(async_client, group_id=group_id, tmdb_id=1, title="Movie OK", media_type="movie")
@@ -113,7 +113,7 @@ async def test_ai_rerank_reorders_candidates_and_stores_why(async_client, monkey
     username = _u("b")
     await _register_and_login(async_client, user_factory, login_helper, email=email, username=username)
 
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = await _add_tmdb_item(async_client, group_id=group_id, tmdb_id=11, title="A")
@@ -147,7 +147,7 @@ async def test_ai_rerank_invalid_ids_falls_back_deterministic(async_client, monk
     username = _u("c")
     await _register_and_login(async_client, user_factory, login_helper, email=email, username=username)
 
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     i1 = await _add_tmdb_item(async_client, group_id=group_id, tmdb_id=21, title="A")
@@ -177,7 +177,7 @@ async def test_missing_openai_key_does_not_break_session_creation(async_client, 
     username = _u("d")
     await _register_and_login(async_client, user_factory, login_helper, email=email, username=username)
 
-    group = (await async_client.post("/groups", json={"name": "G", "member_user_ids": []})).json()
+    group = (await async_client.post("/groups", json={"name": "G"})).json()
     group_id = group["id"]
 
     await _add_tmdb_item(async_client, group_id=group_id, tmdb_id=31, title="A")

@@ -61,3 +61,15 @@ class UnfriendRequest(BaseModel):
 class UnfriendResponse(BaseModel):
     ok: bool
     removed: bool
+
+
+class BlockedUserListItem(AvatarFields):
+    id: UUID
+    username: str
+    display_name: str
+    blocked_at: datetime
+
+
+class BlockUserResponse(BaseModel):
+    ok: bool = True
+    already_blocked: bool = False

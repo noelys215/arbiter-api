@@ -67,6 +67,13 @@ async def find_user_by_friend_identifier(
     ).scalar_one_or_none()
 
 
+def friend_identifier_kind(identifier: str) -> str:
+    normalized = identifier.strip()
+    if normalized.startswith("@") or "@" not in normalized:
+        return "username"
+    return "email"
+
+
 async def update_display_name(
     db: AsyncSession,
     *,

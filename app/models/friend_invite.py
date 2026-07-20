@@ -21,6 +21,7 @@ class FriendInvite(Base):
         nullable=False,
         index=True,
     )
+    pair_key: Mapped[str] = mapped_column(sa.String(73), nullable=False)
 
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
@@ -29,6 +30,21 @@ class FriendInvite(Base):
     uses_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False)
+
+    __table_args__ = (
+        sa.CheckConstraint("max_uses = 1", name="ck_friend_invites_single_use"),
+        sa.CheckConstraint(
+            "uses_count >= 0 AND uses_count <= 1",
+            name="ck_friend_invites_uses_count",
+        ),
+        sa.Index(
+            "uq_friend_invites_pending_pair",
+            "pair_key",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL AND uses_count = 0"),
+            sqlite_where=sa.text("revoked_at IS NULL AND uses_count = 0"),
+        ),
+    )
 
     created_by = relationship("User", foreign_keys=[created_by_user_id])
     target = relationship("User", foreign_keys=[target_user_id])

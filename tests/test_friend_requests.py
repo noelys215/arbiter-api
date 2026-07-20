@@ -182,8 +182,76 @@ async def test_friend_request_accepts_email_and_username(
     response = await client.post(
         "/friends/requests", json={"identifier": display_only["display_name"]}
     )
-    assert response.status_code == 201
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No Arbiter account uses that username."
     assert (await client.get("/friends/requests")).json()["outgoing"] == []
+
+
+async def test_blocking_closes_requests_and_prevents_future_contact_until_unblocked(
+    client, client_factory, user_factory, login_helper
+):
+    user_a, user_b, token_b = await _two_users(
+        client, client_factory, user_factory, login_helper
+    )
+    assert (
+        await client.post("/friends/requests", json={"identifier": user_b["username"]})
+    ).status_code == 201
+
+    async with client_factory() as client_b:
+        client_b.cookies.set("access_token", token_b)
+        blocked = await client_b.post(f"/friends/{user_a['id']}/block")
+        assert blocked.status_code == 200
+        assert (await client_b.get("/friends/requests")).json()["incoming"] == []
+        blocked_users = (await client_b.get("/friends/blocked")).json()
+        assert [row["id"] for row in blocked_users] == [user_a["id"]]
+
+        client.cookies.clear()
+        await login_helper(
+            client, email=user_a["email"], password=user_a["password"]
+        )
+        hidden = await client.post(
+            "/friends/requests", json={"identifier": user_b["username"]}
+        )
+        assert hidden.status_code == 201
+        assert (await client.get("/friends/requests")).json()["outgoing"] == []
+
+        unblocked = await client_b.delete(f"/friends/{user_a['id']}/block")
+        assert unblocked.status_code == 200
+        assert (await client_b.get("/friends/blocked")).json() == []
+
+        retried = await client.post(
+            "/friends/requests", json={"identifier": user_b["username"]}
+        )
+        assert retried.status_code == 201
+
+
+async def test_blocking_an_existing_friend_removes_friendship_not_group_membership(
+    client, client_factory, user_factory, login_helper
+):
+    user_a, user_b, token_b = await _two_users(
+        client, client_factory, user_factory, login_helper
+    )
+    async with client_factory() as client_b:
+        client_b.cookies.set("access_token", token_b)
+        await client.post("/friends/requests", json={"identifier": user_b["email"]})
+        request_id = (await client.get("/friends/requests")).json()["outgoing"][0]["id"]
+        await client_b.post(
+            f"/friends/requests/{request_id}/decision", json={"decision": "accept"}
+        )
+        group = (await client.post("/groups", json={"name": "Still Together"})).json()
+        invite = await client.post(
+            f"/groups/{group['id']}/invites",
+            json={"target_user_id": user_b["id"]},
+        )
+        await client_b.post(
+            f"/group-invites/{invite.json()['id']}/decision",
+            json={"decision": "accept"},
+        )
+
+        await client_b.post(f"/friends/{user_a['id']}/block")
+        assert (await client_b.get("/friends")).json() == []
+        assert (await client.get("/friends")).json() == []
+        assert (await client_b.get(f"/groups/{group['id']}")).status_code == 200
 
 
 async def test_friend_request_emits_compact_updates_after_commit(
