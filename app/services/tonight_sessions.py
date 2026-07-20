@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa

@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID
 
 
 # revision identifiers, used by Alembic.
@@ -16,9 +17,6 @@ revision: str = '0bbf91ea8901'
 down_revision: Union[str, None] = '680581f9c333'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
-
-from sqlalchemy.dialects.postgresql import UUID
 
 
 def upgrade():
