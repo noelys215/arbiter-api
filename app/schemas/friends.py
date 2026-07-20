@@ -16,7 +16,7 @@ class FriendRequestCreate(BaseModel):
     def clean_identifier(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("Email, username, or display name is required")
+            raise ValueError("Email or username is required")
         return cleaned
 
 

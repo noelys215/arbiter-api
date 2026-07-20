@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.core.usernames import canonicalize_username, is_valid_username
 from app.schemas.users import AvatarFields, AvatarSource
+
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -9,12 +12,24 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)  # allow chars, enforce bytes below
 
-    @field_validator("username", "display_name")
+    @field_validator("username", mode="before")
     @classmethod
-    def clean_account_name(cls, value: str) -> str:
+    def clean_username(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        username = canonicalize_username(value)
+        if not is_valid_username(username):
+            raise ValueError(
+                "Username must use 3-50 lowercase letters, numbers, or underscores"
+            )
+        return username
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("Account name is required")
+            raise ValueError("Display name is required")
         return cleaned
 
     @field_validator("password")

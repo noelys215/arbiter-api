@@ -114,6 +114,7 @@ def user_factory(unique_str):
     ):
         email = email or f"{unique_str('user')}@example.com"
         username = username or unique_str("user")
+        username = username.strip().removeprefix("@").lower()
         display_name = display_name or username
         r = await client.post(
             "/auth/register",

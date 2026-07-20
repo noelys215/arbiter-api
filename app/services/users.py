@@ -5,15 +5,17 @@ from uuid import UUID
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.usernames import canonicalize_username
 from app.models.friendship import Friendship
 from app.models.group_membership import GroupMembership
 from app.models.user import User
 
 
 async def username_exists(db: AsyncSession, username: str) -> bool:
+    username = canonicalize_username(username)
     result = await db.execute(
         sa.select(User.id).where(
-            sa.func.lower(User.username) == username.strip().lower()
+            sa.func.lower(User.username) == username
         )
     )
     return result.scalar_one_or_none() is not None
@@ -24,8 +26,9 @@ async def ensure_username_available(
     *,
     username: str,
 ) -> None:
+    username = canonicalize_username(username)
     query = sa.select(User.id).where(
-        sa.func.lower(User.username) == username.strip().lower()
+        sa.func.lower(User.username) == username
     )
     if (await db.execute(query)).scalar_one_or_none() is not None:
         raise ValueError("username_taken")
@@ -40,7 +43,7 @@ async def find_user_by_friend_identifier(
         return None
 
     if normalized.startswith("@"):
-        username = normalized[1:]
+        username = canonicalize_username(normalized)
         if not username:
             return None
         return (
@@ -56,9 +59,10 @@ async def find_user_by_friend_identifier(
             )
         ).scalar_one_or_none()
 
+    username = canonicalize_username(normalized)
     return (
         await db.execute(
-            sa.select(User).where(sa.func.lower(User.username) == normalized)
+            sa.select(User).where(sa.func.lower(User.username) == username)
         )
     ).scalar_one_or_none()
 

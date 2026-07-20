@@ -67,7 +67,7 @@ async def test_registration_rejects_case_insensitive_identifier_conflicts(
 
     payload = {
         "email": f"{unique_str('email')}@example.com",
-        "username": existing["username"].swapcase(),
+        "username": f"@{existing['username'].swapcase()}",
         "display_name": unique_str("Another Display"),
         "password": "SuperSecret123",
     }
@@ -80,6 +80,42 @@ async def test_registration_rejects_case_insensitive_identifier_conflicts(
         json={"email": existing["email"].upper(), "password": existing["password"]},
     )
     assert login.status_code == 200
+
+
+async def test_registration_stores_canonical_username(client, unique_str):
+    email = f"{unique_str('canonical')}@example.com"
+    response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "username": "  @Movie_Night_Host  ",
+            "display_name": "Movie Night Host",
+            "password": "SuperSecret123",
+        },
+    )
+    assert response.status_code == 201
+
+    login = await client.post(
+        "/auth/login",
+        json={"email": email, "password": "SuperSecret123"},
+    )
+    assert login.status_code == 200
+    assert (await client.get("/me")).json()["username"] == "movie_night_host"
+
+
+async def test_registration_rejects_noncanonical_username_characters(
+    client, unique_str
+):
+    response = await client.post(
+        "/auth/register",
+        json={
+            "email": f"{unique_str('invalid')}@example.com",
+            "username": "Movie Night Host",
+            "display_name": "Movie Night Host",
+            "password": "SuperSecret123",
+        },
+    )
+    assert response.status_code == 422
 
 async def test_display_names_can_be_shared_between_accounts(
     client, user_factory, login_helper, unique_str
