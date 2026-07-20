@@ -24,6 +24,9 @@ _JUSTWATCH_ANCHOR_RE = re.compile(
     r'<a href="(?P<href>https://click\.justwatch\.com/a\?[^"]+)"[^>]*title="(?P<title>[^"]+)"',
     flags=re.IGNORECASE,
 )
+_TMDB_IMAGE_PATH_RE = re.compile(r"^/[A-Za-z0-9._-]+$")
+_TMDB_IMAGE_SIZES = {"w500", "w780", "original"}
+_MAX_TMDB_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def _cache_get(key: str):
@@ -39,6 +42,31 @@ def _cache_get(key: str):
 
 def _cache_set(key: str, value):
     _CACHE[key] = (time.time() + _TTL_SECONDS, value)
+
+
+async def fetch_tmdb_image(
+    *, path: str, size: str = "w780"
+) -> tuple[bytes, str]:
+    if size not in _TMDB_IMAGE_SIZES or not _TMDB_IMAGE_PATH_RE.fullmatch(path):
+        raise ValueError("Movie artwork is invalid")
+
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://image.tmdb.org/t/p",
+            timeout=8,
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(f"/{size}{path}", headers={"Accept": "image/*"})
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ValueError("Movie artwork is unavailable") from exc
+
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("Movie artwork is unavailable")
+    if len(response.content) > _MAX_TMDB_IMAGE_BYTES:
+        raise ValueError("Movie artwork is unavailable")
+    return response.content, content_type
 
 
 async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:

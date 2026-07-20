@@ -136,3 +136,50 @@ async def test_movie_detail_session_context_excludes_vote_data(
     assert body["session"]["mood_cue_ids"] == ["easygoing"]
     assert "votes" not in body["session"]
     assert "vote_summaries" not in body["session"]
+
+
+@pytest.mark.anyio
+async def test_completed_winner_artwork_is_authorized_and_proxied(
+    async_client, monkeypatch, user_factory, login_helper
+):
+    from app.services import movie_presentation
+
+    _, group, _ = await _group_movie(async_client, user_factory, login_helper)
+    second = await async_client.post(
+        f"/groups/{group['id']}/watchlist",
+        json={
+            "type": "tmdb",
+            "tmdb_id": 604,
+            "media_type": "movie",
+            "title": "The Matrix Reloaded",
+            "year": 2003,
+            "poster_path": "/reloaded.jpg",
+        },
+    )
+    assert second.status_code == 201, second.text
+    created = await async_client.post(
+        f"/groups/{group['id']}/sessions",
+        json={"constraints": {}, "duration_seconds": 90, "candidate_count": 5},
+    )
+    winner = await async_client.post(f"/sessions/{created.json()['session_id']}/shuffle")
+    completed = await async_client.post(
+        f"/sessions/{created.json()['session_id']}/completion"
+    )
+    assert winner.status_code == 200, winner.text
+    assert completed.status_code == 200, completed.text
+
+    winner_row = next(row for row in completed.json()["candidates"] if row["is_winner"])
+
+    async def fake_image(*, path: str, size: str):
+        assert path in {"/matrix.jpg", "/reloaded.jpg"}
+        assert size == "w780"
+        return b"poster-bytes", "image/jpeg"
+
+    monkeypatch.setattr(movie_presentation, "fetch_tmdb_image", fake_image)
+    response = await async_client.get(
+        f"/groups/{group['id']}/movie-night-artwork/{winner_row['id']}"
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"poster-bytes"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, max-age=86400"

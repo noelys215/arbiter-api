@@ -23,7 +23,7 @@ from app.schemas.movie_presentation import (
     MovieSessionContextOut,
     MovieWatchlistContextOut,
 )
-from app.services.tmdb import fetch_tmdb_presentation_details
+from app.services.tmdb import fetch_tmdb_image, fetch_tmdb_presentation_details
 from app.services.watchlist import assert_user_in_group
 
 
@@ -362,3 +362,28 @@ async def get_movie_detail(
         session=session_context,
         history=await _history_context(db, group_id=group_id, base=base),
     )
+
+
+async def get_movie_night_artwork(
+    db: AsyncSession,
+    *,
+    group_id: uuid.UUID,
+    user_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+) -> tuple[bytes, str]:
+    await assert_user_in_group(db, group_id, user_id)
+    candidate = (
+        await db.execute(
+            select(TonightSessionCandidate)
+            .join(TonightSession, TonightSession.id == TonightSessionCandidate.session_id)
+            .where(
+                TonightSessionCandidate.id == candidate_id,
+                TonightSessionCandidate.is_winner.is_(True),
+                TonightSession.group_id == group_id,
+                TonightSession.status == "completed",
+            )
+        )
+    ).scalar_one_or_none()
+    if candidate is None or not candidate.poster_path:
+        raise ValueError("Movie artwork is unavailable")
+    return await fetch_tmdb_image(path=candidate.poster_path, size="w780")
