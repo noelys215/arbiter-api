@@ -676,6 +676,148 @@ async def fetch_tmdb_title_details(*, tmdb_id: int, media_type: str) -> dict[str
     return details
 
 
+def _release_year(value: object) -> int | None:
+    if not isinstance(value, str) or len(value) < 4 or not value[:4].isdigit():
+        return None
+    return int(value[:4])
+
+
+def _presentation_certification(data: dict[str, Any], media_type: str) -> str | None:
+    node = data.get("release_dates" if media_type == "movie" else "content_ratings")
+    rows = node.get("results") if isinstance(node, dict) else None
+    if not isinstance(rows, list):
+        return None
+    us = next(
+        (row for row in rows if isinstance(row, dict) and row.get("iso_3166_1") == "US"),
+        None,
+    )
+    if not isinstance(us, dict):
+        return None
+    if media_type == "tv":
+        rating = us.get("rating")
+        return rating.strip() if isinstance(rating, str) and rating.strip() else None
+    release_rows = us.get("release_dates")
+    if not isinstance(release_rows, list):
+        return None
+    for row in release_rows:
+        certification = row.get("certification") if isinstance(row, dict) else None
+        if isinstance(certification, str) and certification.strip():
+            return certification.strip()
+    return None
+
+
+def _presentation_credits(data: dict[str, Any], media_type: str) -> tuple[list[str], list[dict[str, str | None]]]:
+    credits = data.get("credits" if media_type == "movie" else "aggregate_credits")
+    if not isinstance(credits, dict):
+        return [], []
+    directors: list[str] = []
+    for row in credits.get("crew", []):
+        if not isinstance(row, dict):
+            continue
+        jobs = [row.get("job")]
+        if isinstance(row.get("jobs"), list):
+            jobs.extend(job.get("job") for job in row["jobs"] if isinstance(job, dict))
+        if "Director" not in jobs:
+            continue
+        name = row.get("name")
+        if isinstance(name, str) and name.strip() and name not in directors:
+            directors.append(name.strip())
+
+    cast: list[dict[str, str | None]] = []
+    for row in credits.get("cast", [])[:6]:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        role = row.get("character")
+        if not isinstance(role, str) and isinstance(row.get("roles"), list) and row["roles"]:
+            first_role = row["roles"][0]
+            role = first_role.get("character") if isinstance(first_role, dict) else None
+        cast.append(
+            {
+                "name": name.strip(),
+                "role": role.strip() if isinstance(role, str) and role.strip() else None,
+            }
+        )
+    return directors[:3], cast
+
+
+def _presentation_trailer(data: dict[str, Any]) -> str | None:
+    videos = data.get("videos")
+    rows = videos.get("results") if isinstance(videos, dict) else None
+    if not isinstance(rows, list):
+        return None
+    candidates = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("site") == "YouTube"
+        and row.get("type") == "Trailer"
+        and isinstance(row.get("key"), str)
+    ]
+    candidates.sort(key=lambda row: (not bool(row.get("official")), str(row.get("published_at") or "")))
+    if not candidates:
+        return None
+    return f"https://www.youtube.com/watch?v={candidates[0]['key']}"
+
+
+async def fetch_tmdb_presentation_details(*, tmdb_id: int, media_type: str) -> dict[str, Any]:
+    """Return optional presentation metadata in one cached TMDB request."""
+    if media_type not in {"movie", "tv"}:
+        return {}
+    key = f"presentation:{media_type}:{tmdb_id}"
+    cached = _cache_get(key)
+    if isinstance(cached, dict):
+        return dict(cached)
+    if settings.env == "test":
+        return {}
+
+    append = "credits,videos,release_dates" if media_type == "movie" else "aggregate_credits,videos,content_ratings"
+    headers = {
+        "Authorization": f"Bearer {settings.tmdb_token}",
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=6) as client:
+            response = await client.get(
+                f"/{media_type}/{tmdb_id}",
+                params={"append_to_response": append},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return {}
+
+    release_date = data.get("release_date" if media_type == "movie" else "first_air_date")
+    directors, cast = _presentation_credits(data, media_type)
+    genres = [
+        row["name"].strip()
+        for row in data.get("genres", [])
+        if isinstance(row, dict) and isinstance(row.get("name"), str) and row["name"].strip()
+    ]
+    raw_title = data.get("title" if media_type == "movie" else "name")
+    details = {
+        "title": raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else None,
+        "release_date": release_date if isinstance(release_date, str) and release_date else None,
+        "release_year": _release_year(release_date),
+        "runtime_minutes": _runtime_from_tmdb_payload(media_type=media_type, data=data),
+        "poster_path": data.get("poster_path") if isinstance(data.get("poster_path"), str) else None,
+        "backdrop_path": data.get("backdrop_path") if isinstance(data.get("backdrop_path"), str) else None,
+        "overview": data.get("overview") if isinstance(data.get("overview"), str) and data["overview"].strip() else None,
+        "genres": genres,
+        "directors": directors,
+        "cast": cast,
+        "certification": _presentation_certification(data, media_type),
+        "trailer_url": _presentation_trailer(data),
+    }
+    _cache_set(key, details)
+    return details
+
+
+
+
 def _safe_int(value: Any) -> int | None:
     if isinstance(value, int):
         return value

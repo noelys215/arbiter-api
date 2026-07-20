@@ -30,6 +30,7 @@ from app.api.routes.sessions import router as sessions_router
 from app.api.routes.group_invites import router as group_invites_router
 from app.api.routes.realtime import router as realtime_router
 from app.api.routes.feedback import router as feedback_router
+from app.api.routes.movie_presentation import router as movie_presentation_router
 from app.middleware.feedback_body_limit import FeedbackBodyLimitMiddleware
 from app.services.feedback_rate_limit import close_feedback_rate_limiter
 
@@ -87,6 +88,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(me_router)
 app.include_router(groups_router)
+app.include_router(movie_presentation_router)
 app.include_router(tmdb_router)
 app.include_router(watchlist_router)
 app.include_router(sessions_router)

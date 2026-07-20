@@ -516,6 +516,7 @@ def completed_session_out(session: TonightSession) -> CompletedSessionOut:
             CompletedCandidateOut(
                 id=row.id,
                 source_watchlist_item_id=candidate_source_id(row),
+                source_title_id=row.source_title_id,
                 source=row.title_source,
                 source_id=row.title_source_id,
                 media_type=row.media_type,

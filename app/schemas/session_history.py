@@ -32,6 +32,7 @@ class CompletedVoteOut(BaseModel):
 class CompletedCandidateOut(BaseModel):
     id: UUID
     source_watchlist_item_id: UUID
+    source_title_id: UUID | None = None
     source: str | None
     source_id: str | None
     media_type: str | None
