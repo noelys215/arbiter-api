@@ -52,6 +52,15 @@ def public_user_from_user(user: User) -> dict[str, object | None]:
     }
 
 
+def me_user_from_user(user: User) -> dict[str, object | None]:
+    return {
+        **public_user_from_user(user),
+        "onboarding_tour_version": user.onboarding_tour_version,
+        "onboarding_tour_status": user.onboarding_tour_status,
+        "onboarding_tour_updated_at": user.onboarding_tour_updated_at,
+    }
+
+
 def invite_user_from_user(user: User) -> dict[str, object | None]:
     return {
         "id": str(user.id),

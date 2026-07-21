@@ -24,6 +24,12 @@ class User(Base):
     avatar_style: Mapped[str | None] = mapped_column(String(32), nullable=True)
     avatar_seed: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    onboarding_tour_version: Mapped[int | None] = mapped_column(nullable=True)
+    onboarding_tour_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    onboarding_tour_updated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
@@ -37,4 +43,8 @@ class User(Base):
     __table_args__ = (
         sa.Index("uq_users_email_lower", sa.func.lower(email), unique=True),
         sa.Index("uq_users_username_lower", sa.func.lower(username), unique=True),
+        sa.CheckConstraint(
+            "onboarding_tour_status IS NULL OR onboarding_tour_status IN ('completed', 'skipped')",
+            name="ck_users_onboarding_tour_status",
+        ),
     )

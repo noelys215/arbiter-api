@@ -9,7 +9,8 @@ def test_auth_migration_is_in_head_chain_and_matches_registered_tables():
     config = Config("alembic.ini")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "f1b3d5e7a9c1"
+    assert scripts.get_current_head() == "a2c4e6f8b0d2"
+    assert scripts.get_revision("a2c4e6f8b0d2").down_revision == "f1b3d5e7a9c1"
     assert scripts.get_revision("f1b3d5e7a9c1").down_revision == "e9a1b3c5d7f9"
     assert {
         "auth_sessions",

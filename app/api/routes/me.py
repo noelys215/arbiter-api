@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 import sqlalchemy as sa
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import value_error
-from app.api.presenters.users import public_user_from_user
+from app.api.presenters.users import me_user_from_user
 from app.models.user import User
 from app.core.config import settings
 from app.models.group import Group
@@ -16,6 +17,7 @@ from app.schemas.auth import (
     AvatarUpdateRequest,
     DeleteAccountRequest,
     MeResponse,
+    OnboardingTourUpdateRequest,
     ProfileUpdateRequest,
 )
 from app.schemas.users import AVATAR_STYLE_VALUES
@@ -44,7 +46,7 @@ def _validate_avatar_update(payload: AvatarUpdateRequest) -> None:
 
 @router.get("/me", response_model=MeResponse)
 async def me(user: User = Depends(get_current_user)):
-    return MeResponse(**public_user_from_user(user))
+    return MeResponse(**me_user_from_user(user))
 
 
 @router.patch("/me", response_model=MeResponse)
@@ -62,7 +64,33 @@ async def update_profile(
     await db.commit()
     await db.refresh(user)
     await publish_profile_update(recipients, user_id=user.id)
-    return MeResponse(**public_user_from_user(user))
+    return MeResponse(**me_user_from_user(user))
+
+
+@router.patch("/me/onboarding-tour", response_model=MeResponse)
+async def update_onboarding_tour(
+    payload: OnboardingTourUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if (
+        user.onboarding_tour_version == payload.version
+        and user.onboarding_tour_status == payload.status
+    ):
+        return MeResponse(**me_user_from_user(user))
+
+    if (
+        user.onboarding_tour_version is not None
+        and user.onboarding_tour_version > payload.version
+    ):
+        return MeResponse(**me_user_from_user(user))
+
+    user.onboarding_tour_version = payload.version
+    user.onboarding_tour_status = payload.status
+    user.onboarding_tour_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(user)
+    return MeResponse(**me_user_from_user(user))
 
 
 @router.patch("/me/avatar", response_model=MeResponse)
@@ -83,7 +111,7 @@ async def update_avatar(
 
     await db.commit()
     await db.refresh(user)
-    return MeResponse(**public_user_from_user(user))
+    return MeResponse(**me_user_from_user(user))
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)

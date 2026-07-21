@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -109,8 +110,16 @@ class ProfileUpdateRequest(StrictAuthRequest):
         return cleaned
 
 
+class OnboardingTourUpdateRequest(StrictAuthRequest):
+    version: int = Field(ge=1, le=10_000, strict=True)
+    status: Literal["completed", "skipped"]
+
+
 class MeResponse(AvatarFields):
     id: str
     email: EmailStr
     username: str
     display_name: str
+    onboarding_tour_version: int | None = None
+    onboarding_tour_status: Literal["completed", "skipped"] | None = None
+    onboarding_tour_updated_at: datetime | None = None
