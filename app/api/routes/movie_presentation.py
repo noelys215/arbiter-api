@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -43,6 +44,7 @@ async def movie_detail_route(
 async def movie_night_artwork_route(
     group_id: UUID,
     candidate_id: UUID,
+    kind: Literal["poster", "backdrop"] = Query(default="poster"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -52,6 +54,7 @@ async def movie_night_artwork_route(
             group_id=group_id,
             user_id=user.id,
             candidate_id=candidate_id,
+            artwork_kind=kind,
         )
     except PermissionError as exc:
         raise permission_error(exc) from exc

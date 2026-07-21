@@ -183,3 +183,52 @@ async def test_completed_winner_artwork_is_authorized_and_proxied(
     assert response.content == b"poster-bytes"
     assert response.headers["content-type"] == "image/jpeg"
     assert response.headers["cache-control"] == "private, max-age=86400"
+
+
+@pytest.mark.anyio
+async def test_completed_winner_backdrop_is_authorized_and_proxied(
+    async_client, monkeypatch, user_factory, login_helper
+):
+    from app.services import movie_presentation
+
+    _, group, _ = await _group_movie(async_client, user_factory, login_helper)
+    created = await async_client.post(
+        f"/groups/{group['id']}/sessions",
+        json={"constraints": {}, "duration_seconds": 90, "candidate_count": 5},
+    )
+    await async_client.post(f"/sessions/{created.json()['session_id']}/shuffle")
+    completed = await async_client.post(
+        f"/sessions/{created.json()['session_id']}/completion"
+    )
+    winner_row = next(row for row in completed.json()["candidates"] if row["is_winner"])
+
+    async def fake_details(*, tmdb_id: int, media_type: str):
+        assert tmdb_id == 603
+        assert media_type == "movie"
+        return {"backdrop_path": "/matrix-wide.jpg"}
+
+    async def fake_image(*, path: str, size: str):
+        assert path == "/matrix-wide.jpg"
+        assert size == "w1280"
+        return b"backdrop-bytes", "image/jpeg"
+
+    monkeypatch.setattr(
+        movie_presentation, "fetch_tmdb_presentation_details", fake_details
+    )
+    monkeypatch.setattr(movie_presentation, "fetch_tmdb_image", fake_image)
+    response = await async_client.get(
+        f"/groups/{group['id']}/movie-night-artwork/{winner_row['id']}?kind=backdrop"
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"backdrop-bytes"
+
+
+@pytest.mark.anyio
+async def test_completed_winner_artwork_rejects_unknown_kind(
+    async_client, user_factory, login_helper
+):
+    _, group, _ = await _group_movie(async_client, user_factory, login_helper)
+    response = await async_client.get(
+        f"/groups/{group['id']}/movie-night-artwork/00000000-0000-0000-0000-000000000000?kind=external"
+    )
+    assert response.status_code == 422

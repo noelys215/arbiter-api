@@ -370,6 +370,7 @@ async def get_movie_night_artwork(
     group_id: uuid.UUID,
     user_id: uuid.UUID,
     candidate_id: uuid.UUID,
+    artwork_kind: str = "poster",
 ) -> tuple[bytes, str]:
     await assert_user_in_group(db, group_id, user_id)
     candidate = (
@@ -384,6 +385,30 @@ async def get_movie_night_artwork(
             )
         )
     ).scalar_one_or_none()
-    if candidate is None or not candidate.poster_path:
+    if candidate is None:
         raise ValueError("Movie artwork is unavailable")
-    return await fetch_tmdb_image(path=candidate.poster_path, size="w780")
+    artwork_path = (
+        candidate.backdrop_path if artwork_kind == "backdrop" else candidate.poster_path
+    )
+    if (
+        artwork_kind == "backdrop"
+        and not artwork_path
+        and candidate.title_source == "tmdb"
+        and candidate.title_source_id
+    ):
+        try:
+            tmdb_id = int(candidate.title_source_id)
+        except ValueError:
+            tmdb_id = None
+        if tmdb_id is not None:
+            enriched = await fetch_tmdb_presentation_details(
+                tmdb_id=tmdb_id,
+                media_type=candidate.media_type or "movie",
+            )
+            artwork_path = enriched.get("backdrop_path")
+    if not artwork_path:
+        raise ValueError("Movie artwork is unavailable")
+    return await fetch_tmdb_image(
+        path=artwork_path,
+        size="w1280" if artwork_kind == "backdrop" else "w780",
+    )

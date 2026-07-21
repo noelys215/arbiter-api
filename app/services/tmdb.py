@@ -25,7 +25,7 @@ _JUSTWATCH_ANCHOR_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _TMDB_IMAGE_PATH_RE = re.compile(r"^/[A-Za-z0-9._-]+$")
-_TMDB_IMAGE_SIZES = {"w500", "w780", "original"}
+_TMDB_IMAGE_SIZES = {"w500", "w780", "w1280", "original"}
 _MAX_TMDB_IMAGE_BYTES = 10 * 1024 * 1024
 
 
