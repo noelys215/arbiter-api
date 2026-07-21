@@ -16,7 +16,7 @@ limits fail closed.
 | POST | `/auth/magic-link/request` | Public | IP + subject limit; generic response; browser-intent cookie | Generic success |
 | POST | `/auth/magic-link/verify` | One-time hashed grant + matching intent | Atomic consume, expiry, JSON only | Generic success + cookie |
 | GET | `/auth/google/login` | Public | IP limit; Authlib state session | Google redirect |
-| GET | `/auth/google/callback` | OAuth state; verified email + immutable Google subject | Exact configured redirects | Frontend redirect + cookie |
+| GET | `/auth/google/callback` | OAuth state; verified email + immutable Google subject | One-time existing-account link only for authoritative Gmail/Workspace claims; exact redirects | Frontend redirect + cookie |
 | POST | `/auth/local-bypass` | Local/test only | Constant-time configured token | Generic success + cookie |
 | POST | `/auth/logout` | Optional active cookie | Revokes JTI and closes user sockets | Generic success |
 | POST | `/feedback` | Optional cookie | Feature gate; 16 KiB; honeypot; Redis; idempotency | Generic success |

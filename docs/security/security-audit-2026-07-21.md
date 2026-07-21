@@ -91,7 +91,7 @@ surface, not only theoretical exploitability.
 | A-01 | High / High | A foreign-origin credentialed POST could reach logout because unsafe methods did not validate Origin and production supports cross-site cookies. | Exact configured Origin is required before parsing every unsafe request. | Allowed, absent, malformed, `null`, and foreign Origin tests; browser cross-site denial; fixed. |
 | A-02 | High / High | The same magic-link JWT could be submitted repeatedly until expiry, and appeared in the query string. Account takeover remains possible after link disclosure. | Store hashed one-time grant and browser intent; carry grant in fragment, strip immediately, verify through JSON POST, consume atomically. | Replay, expiry, intent mismatch, URL cleanup, and concurrent-consume tests; fixed. |
 | A-03 | High / Medium | A copied JWT remained valid after the originating browser logged out because logout only cleared its cookie. | Require `jti` and active database session; revoke JTI and close sockets on logout/deletion. | Copied-cookie replay and WebSocket logout tests; fixed. |
-| A-04 | High / Medium | Google callback matched users by email without binding immutable provider subject or requiring verified email, risking account confusion. | Bind `provider + sub`, require `email_verified`, and reject collisions instead of silently linking. | OAuth state, identity collision, verified-email, and redirect tests; fixed. |
+| A-04 | High / Medium | Google callback matched users by email without binding immutable provider subject or requiring verified email, risking account confusion. | Bind `provider + sub`, require `email_verified`, and permit a one-time pre-migration link only when Google is authoritative for Gmail or a matching Workspace domain; reject all other collisions. | OAuth state, authoritative bootstrap, identity collision, verified-email, and redirect tests; fixed. |
 | A-05 | High / Medium | `pip-audit` initially reported 32 advisories in production auth/request dependencies. | Upgrade deliberately and replace `python-jose`/ECDSA with fixed-algorithm PyJWT. | Final `pip-audit` reports zero known vulnerabilities; fixed. |
 | A-06 | Medium / High | Repeated auth, search, social, group, session, and vote calls had no shared sustained control and could exhaust email/provider/DB capacity. | Shared Redis account/IP/subject fixed windows, opaque keys, controlled 429, fail closed in production. | Boundary, separate-user, burst, recovery, failure, and key-secrecy tests; fixed in code, Render KV deployment required. |
 | A-07 | Medium / Medium | Production docs, OpenAPI, and MCP disclosed extra callable/schema surface. | Disable all three outside local/test. | Environment route tests; fixed. |
@@ -122,8 +122,10 @@ Deployment invalidates pre-migration cookies and requires all users to sign in.
 
 Magic links are one-time and same-browser intent-bound. This intentionally
 removes cross-device link completion; a future cross-device flow needs an
-explicit confirmation design. Google does not silently link an existing
-magic-link/password account; explicit account linking is future work.
+explicit confirmation design. Existing pre-migration Gmail and matching
+Workspace accounts can bind once from authoritative Google claims, after which
+the immutable subject is required. Other existing-email collisions fail closed;
+explicit account linking is future work.
 
 ## 9. Authorization and data exposure
 
@@ -222,8 +224,8 @@ trivy config --severity HIGH,CRITICAL
 zap-baseline.py against isolated local API
 ```
 
-Final automated results: backend 266 tests after added connection-cap and
-authenticated-mutation-limit tests;
+Final automated results: backend 267 tests including connection-cap,
+authenticated-mutation-limit, and legacy Google identity-binding coverage;
 frontend 84 tests; ESLint, TypeScript, Vite production build, Ruff, migration
 head, audits, and relevant static scans pass. The exact rerun evidence is also
 reported in the implementation closeout; warnings are not represented as pass.
@@ -249,8 +251,8 @@ sender/recipient flags, and `RATE_LIMIT_REDIS_URL`. Secrets remain backend-only.
    launch; production abuse-sensitive routes intentionally fail closed without it.
 2. Complete an isolated Render Postgres restore drill and document retention.
 3. Add a shared realtime broker before any second worker/instance.
-4. Consider explicit Google-to-existing-account linking and a deliberate
-   cross-device magic-link flow; current behavior fails closed.
+4. Add explicit Google linking for non-authoritative third-party email domains
+   and a deliberate cross-device magic-link flow; current behavior fails closed.
 5. Add centralized structured security-event monitoring before high traffic.
 6. Perform an independent authenticated penetration test before materially
    sensitive or high-volume use. ZAP coverage here was passive and local.

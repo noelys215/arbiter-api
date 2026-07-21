@@ -384,6 +384,51 @@ async def test_google_does_not_silently_link_existing_email(
     assert identity is None
 
 
+async def test_google_links_existing_account_when_google_is_email_authority(
+    client, db_session, user_factory, monkeypatch
+):
+    from app.api.routes import auth as auth_routes
+
+    existing = await user_factory(client, email="existing-user@gmail.com")
+    claims = {
+        "email": existing["email"],
+        "sub": "legacy-google-subject",
+        "email_verified": True,
+        "name": "Existing Google User",
+        "picture": "https://lh3.googleusercontent.com/avatar",
+    }
+
+    class _FakeGoogleClient:
+        async def authorize_access_token(self, request):
+            _ = request
+            return {"userinfo": claims}
+
+        async def parse_id_token(self, request, token):
+            _ = (request, token)
+            return claims
+
+    monkeypatch.setattr(
+        auth_routes, "get_oauth_client", lambda provider: _FakeGoogleClient()
+    )
+
+    callback = await client.get("/auth/google/callback", follow_redirects=False)
+
+    assert callback.status_code == 302
+    assert "oauth_error" not in callback.headers["location"]
+    me = await client.get("/me")
+    assert me.status_code == 200
+    assert me.json()["id"] == existing["id"]
+    identity = (
+        await db_session.execute(
+            select(OAuthIdentity).where(
+                OAuthIdentity.provider == "google",
+                OAuthIdentity.provider_subject == "legacy-google-subject",
+            )
+        )
+    ).scalar_one()
+    assert str(identity.user_id) == existing["id"]
+
+
 async def test_magic_link_request_sends_email_when_configured(client, monkeypatch):
     from app.api.routes import auth as auth_routes
 

@@ -184,6 +184,21 @@ def _clean_email(value: object) -> str | None:
     return normalized.lower()
 
 
+def _google_is_authoritative_for_email(
+    email: str, userinfo: dict[str, object]
+) -> bool:
+    _, separator, domain = email.lower().rpartition("@")
+    if not separator:
+        return False
+    if domain == "gmail.com":
+        return True
+    hosted_domain = _clean_text(userinfo.get("hd"))
+    return (
+        hosted_domain is not None
+        and secrets.compare_digest(domain, hosted_domain.lower())
+    )
+
+
 def _merge_oauth_claims(base: dict[str, object], extra: dict[str, object]) -> dict[str, object]:
     merged = dict(base)
     for key, value in extra.items():
@@ -305,6 +320,7 @@ async def _resolve_google_user(
     email: str,
     display_name: str,
     avatar_url: str | None,
+    allow_authoritative_email_link: bool,
 ) -> User:
     identity_result = await db.execute(
         select(OAuthIdentity).where(
@@ -331,8 +347,44 @@ async def _resolve_google_user(
     email_result = await db.execute(
         select(User).where(sa.func.lower(User.email) == email.lower())
     )
-    if email_result.scalar_one_or_none() is not None:
-        raise _OAuthIdentityConflict
+    existing_user = email_result.scalar_one_or_none()
+    if existing_user is not None:
+        if not allow_authoritative_email_link:
+            raise _OAuthIdentityConflict
+        existing_user_id = existing_user.id
+        db.add(
+            OAuthIdentity(
+                user_id=existing_user_id,
+                provider="google",
+                provider_subject=subject,
+                provider_email=email,
+            )
+        )
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            linked_identity = (
+                await db.execute(
+                    select(OAuthIdentity).where(
+                        OAuthIdentity.provider == "google",
+                        OAuthIdentity.provider_subject == subject,
+                    )
+                )
+            ).scalar_one_or_none()
+            if (
+                linked_identity is None
+                or linked_identity.user_id != existing_user_id
+            ):
+                raise _OAuthIdentityConflict from exc
+            existing_user = (
+                await db.execute(
+                    select(User).where(User.id == linked_identity.user_id)
+                )
+            ).scalar_one()
+        else:
+            await db.refresh(existing_user)
+        return existing_user
 
     username = await _generate_unique_username(db, email.split("@", 1)[0])
     user = User(
@@ -638,6 +690,9 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db_se
             email=email,
             display_name=display_name,
             avatar_url=avatar_url,
+            allow_authoritative_email_link=_google_is_authoritative_for_email(
+                email, userinfo
+            ),
         )
     except _OAuthIdentityConflict:
         return _oauth_failure_redirect("google_identity_conflict")
