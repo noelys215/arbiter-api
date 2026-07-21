@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 from uuid import UUID
 from app.schemas.users import AvatarFields, InvitePublicUser
 
 
 class FriendRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     identifier: str = Field(min_length=1, max_length=320)
 
     @field_validator("identifier")
@@ -38,6 +40,8 @@ class FriendRequestListResponse(BaseModel):
 
 
 class FriendRequestDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     decision: Literal["accept", "decline"]
 
 
@@ -49,12 +53,13 @@ class FriendRequestDecisionResponse(BaseModel):
 
 class FriendListItem(AvatarFields):
     id: str
-    email: str
     username: str
     display_name: str
 
 
 class UnfriendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     user_id: UUID
 
 

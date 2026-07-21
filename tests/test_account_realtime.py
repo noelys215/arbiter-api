@@ -16,6 +16,7 @@ class FakeWebSocket:
         self.accepted = False
         self.sent: list[dict] = []
         self.fail_send = fail_send
+        self.closed_code: int | None = None
 
     async def accept(self) -> None:
         self.accepted = True
@@ -24,6 +25,9 @@ class FakeWebSocket:
         if self.fail_send:
             raise RuntimeError("socket closed")
         self.sent.append(payload)
+
+    async def close(self, *, code: int) -> None:
+        self.closed_code = code
 
 
 @pytest.mark.anyio
@@ -64,3 +68,19 @@ def test_account_events_are_compact_and_contain_no_private_fields():
 
     for event in events:
         assert not ({"token", "code", "email", "name", "url"} & event.keys())
+
+
+@pytest.mark.anyio
+async def test_account_hub_caps_connections_per_user():
+    hub = AccountRealtimeHub()
+    user_id = uuid4()
+    sockets = [FakeWebSocket() for _ in range(9)]
+
+    results = [
+        await hub.connect(user_id, socket)  # type: ignore[arg-type]
+        for socket in sockets
+    ]
+
+    assert results == [True] * 8 + [False]
+    assert sockets[-1].accepted is False
+    assert sockets[-1].closed_code == 1008

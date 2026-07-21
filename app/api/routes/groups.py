@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.api.deps import get_current_user, get_db
 from app.api.http_errors import permission_error, value_error
+from app.api.mutation_rate_limits import enforce_mutation_rate_limit
 from app.api.social_rate_limits import enforce_social_rate_limit
 from app.api.presenters.users import public_user_from_user
 from app.models.user import User
@@ -44,10 +45,14 @@ router = APIRouter(prefix="/groups", tags=["groups"])
 @router.post("", response_model=GroupListItem, status_code=201)
 async def create_group_route(
     payload: CreateGroupRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
+        await enforce_mutation_rate_limit(
+            request, user=user, action="group_create"
+        )
         g = await create_group(db, user.id, payload.name)
         member_ids = await list_group_member_ids(db, g.id)
         await publish_group_update(

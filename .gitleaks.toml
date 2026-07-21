@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Retired localhost-only cookie jars removed during the 2026-07-21 audit"
+paths = ['''^cookies(?:_[bc]2?)?\.txt$''']

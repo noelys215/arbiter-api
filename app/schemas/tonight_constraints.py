@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.mood_cues import MOOD_CUE_IDS
 
@@ -11,18 +11,20 @@ EnergyType = Literal["low", "med", "high"]
 
 
 class TonightConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     mood_cues: list[str] = Field(default_factory=list, max_length=3)
-    moods: list[str] = Field(default_factory=list)
-    avoid: list[str] = Field(default_factory=list)
+    moods: list[str] = Field(default_factory=list, max_length=20)
+    avoid: list[str] = Field(default_factory=list, max_length=20)
 
     max_runtime: int | None = Field(default=None, ge=30, le=600)
     format: FormatType = Field(default="any")
     energy: EnergyType | None = Field(default=None)
 
-    free_text: str = Field(default="")
+    free_text: str = Field(default="", max_length=500)
     custom_mood_text: str = Field(default="", max_length=240)
     parsed_by_ai: bool = Field(default=False)
-    ai_version: str | None = Field(default=None)
+    ai_version: str | None = Field(default=None, max_length=100)
 
     @field_validator("moods", "avoid")
     @classmethod
@@ -65,7 +67,7 @@ class TonightConstraints(BaseModel):
         if self.parsed_by_ai and not self.ai_version:
             # optional but recommended
             raise ValueError("ai_version is required when parsed_by_ai is true")
-        if not self.parsed_by_ai:
+        if not self.parsed_by_ai and self.ai_version is not None:
             # keep it consistent: if not parsed by AI, ai_version must be null
             self.ai_version = None
         return self

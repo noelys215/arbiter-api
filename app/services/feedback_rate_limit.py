@@ -99,7 +99,9 @@ def opaque_rate_limit_identifier(kind: str, value: str) -> str:
 
 def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
-    candidate = forwarded.rsplit(",", 1)[-1].strip() if forwarded else ""
+    # Render documents the first X-Forwarded-For entry as the real client IP.
+    # Later entries can include infrastructure proxies and are not stable keys.
+    candidate = forwarded.split(",", 1)[0].strip() if forwarded else ""
     if not candidate and request.client is not None:
         candidate = request.client.host
     try:

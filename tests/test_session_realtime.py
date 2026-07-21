@@ -88,3 +88,20 @@ async def test_session_realtime_hub_disconnects_only_user_in_affected_group():
 
     assert affected_socket.closed_code == 1008
     assert other_socket.closed_code is None
+
+
+@pytest.mark.anyio
+async def test_session_hub_caps_connections_per_user():
+    hub = SessionRealtimeHub()
+    group_id = uuid4()
+    user_id = uuid4()
+    sockets = [FakeWebSocket() for _ in range(9)]
+
+    results = [
+        await hub.connect(uuid4(), user_id, group_id, socket)  # type: ignore[arg-type]
+        for socket in sockets
+    ]
+
+    assert results == [True] * 8 + [False]
+    assert sockets[-1].accepted is False
+    assert sockets[-1].closed_code == 1008

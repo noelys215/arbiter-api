@@ -6,6 +6,8 @@ from uuid import UUID
 
 from fastapi import WebSocket
 
+MAX_SESSION_CONNECTIONS_PER_USER = 8
+
 
 class SessionConnection:
     def __init__(self, *, user_id: UUID, group_id: UUID) -> None:
@@ -24,13 +26,24 @@ class SessionRealtimeHub:
         user_id: UUID,
         group_id: UUID,
         websocket: WebSocket,
-    ) -> None:
-        await websocket.accept()
+    ) -> bool:
         async with self._lock:
+            user_connections = sum(
+                connection.user_id == user_id
+                for current in self._connections.values()
+                for connection in current.values()
+            )
+            if user_connections >= MAX_SESSION_CONNECTIONS_PER_USER:
+                if not self._connections[session_id]:
+                    self._connections.pop(session_id, None)
+                await websocket.close(code=1008)
+                return False
+            await websocket.accept()
             self._connections[session_id][websocket] = SessionConnection(
                 user_id=user_id,
                 group_id=group_id,
             )
+        return True
 
     async def disconnect(self, session_id: UUID, websocket: WebSocket) -> None:
         async with self._lock:
@@ -92,6 +105,21 @@ class SessionRealtimeHub:
                 for session_id, current in self._connections.items()
                 for websocket, connection in current.items()
                 if connection.group_id == group_id
+            ]
+        for session_id, websocket in sockets:
+            try:
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            await self.disconnect(session_id, websocket)
+
+    async def disconnect_user_everywhere(self, user_id: UUID) -> None:
+        async with self._lock:
+            sockets = [
+                (session_id, websocket)
+                for session_id, current in self._connections.items()
+                for websocket, connection in current.items()
+                if connection.user_id == user_id
             ]
         for session_id, websocket in sockets:
             try:

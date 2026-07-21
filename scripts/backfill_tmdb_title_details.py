@@ -18,9 +18,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.db.session import AsyncSessionLocal
-from app.models.title import Title
-from app.services.tmdb import fetch_tmdb_title_details
+from app.db.session import AsyncSessionLocal  # noqa: E402
+from app.models.title import Title  # noqa: E402
+from app.services.tmdb import fetch_tmdb_title_details  # noqa: E402
 
 logger = logging.getLogger("backfill_tmdb_title_details")
 

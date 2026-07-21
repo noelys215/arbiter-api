@@ -22,6 +22,8 @@ class CreateGroupRequest(BaseModel):
 
 
 class UpdateGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=120)
 
     @field_validator("name")
@@ -43,7 +45,6 @@ class GroupListItem(BaseModel):
 
 class GroupMember(AvatarFields):
     id: UUID
-    email: str
     username: str
     display_name: str
 
@@ -57,6 +58,8 @@ class GroupDetailResponse(BaseModel):
 
 
 class CreateGroupInviteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     target_user_id: UUID
 
 
@@ -77,6 +80,8 @@ class GroupInvitationListItem(BaseModel):
 
 
 class GroupInviteDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     decision: Literal["accept", "decline"]
 
 
@@ -95,4 +100,6 @@ class DeleteGroupResponse(BaseModel):
 
 
 class TransferGroupOwnershipRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     new_owner_user_id: UUID

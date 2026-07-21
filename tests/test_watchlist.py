@@ -94,6 +94,7 @@ async def test_watchlist_tmdb_add_and_duplicate_returns_existing(
     assert item1["title"]["name"] == "The Matrix"
     assert item1["title"]["release_year"] == 1999
     assert item1["title"]["poster_path"] == "/matrix.jpg"
+    assert "email" not in item1["added_by_user"]
     assert (group_id, "item_added") in broadcasts
 
     r2 = await async_client.post(f"/groups/{group_id}/watchlist", json=payload)

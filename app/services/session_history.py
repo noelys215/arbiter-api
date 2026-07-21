@@ -19,7 +19,6 @@ from app.schemas.session_history import (
     CompletedCandidateOut,
     CompletedParticipantOut,
     CompletedSessionOut,
-    CompletedVoteOut,
     GroupMovieNightPage,
 )
 from app.schemas.tonight_constraints import TonightConstraints
@@ -325,7 +324,6 @@ def _completion_load_options():
             TonightSessionCandidate.watchlist_item
         ).selectinload(WatchlistItem.title),
         selectinload(TonightSession.participant_snapshots),
-        selectinload(TonightSession.vote_snapshots),
     )
 
 
@@ -461,15 +459,6 @@ async def list_group_movie_nights(
 
 
 def completed_session_out(session: TonightSession) -> CompletedSessionOut:
-    votes_by_candidate: dict[uuid.UUID, list[CompletedVoteOut]] = {}
-    for vote in session.vote_snapshots:
-        votes_by_candidate.setdefault(vote.candidate_id, []).append(
-            CompletedVoteOut(
-                participant_id=vote.participant_id,
-                round=vote.round_number,
-                vote=vote.vote,
-            )
-        )
     candidates = sorted(session.candidates, key=lambda row: row.position)
     winner_selected_at = session.winner_selected_at or session.completed_at
     if winner_selected_at is None or session.winner_candidate_id is None:
@@ -515,7 +504,6 @@ def completed_session_out(session: TonightSession) -> CompletedSessionOut:
         candidates=[
             CompletedCandidateOut(
                 id=row.id,
-                source_watchlist_item_id=candidate_source_id(row),
                 source_title_id=row.source_title_id,
                 source=row.title_source,
                 source_id=row.title_source_id,
@@ -533,7 +521,6 @@ def completed_session_out(session: TonightSession) -> CompletedSessionOut:
                 total_vote_count=row.total_vote_count,
                 is_winner=row.is_winner,
                 is_finalist=row.is_finalist,
-                votes=votes_by_candidate.get(row.id, []),
             )
             for row in candidates
         ],

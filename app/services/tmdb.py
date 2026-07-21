@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 import time
+from collections import OrderedDict
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -10,9 +11,12 @@ import httpx
 
 from app.core.config import settings
 
-# Search results and taxonomy payloads share this in-memory cache.
-_CACHE: dict[str, tuple[float, Any]] = {}
+# Search results and taxonomy payloads share this bounded in-memory cache.
+_CACHE: OrderedDict[str, tuple[float, Any]] = OrderedDict()
 _TTL_SECONDS = 600
+_CACHE_MAX_ENTRIES = 512
+TMDB_SEARCH_QUERY_MAX_LENGTH = 100
+_TMDB_SEARCH_RESULT_LIMIT = 20
 _STREAMING_BUCKETS = ("flatrate", "ads", "free")
 _DEFAULT_PROVIDER_REGION = "US"
 _EXCLUDED_STREAMING_PROVIDER_NAMES = {
@@ -24,7 +28,9 @@ _JUSTWATCH_ANCHOR_RE = re.compile(
     r'<a href="(?P<href>https://click\.justwatch\.com/a\?[^"]+)"[^>]*title="(?P<title>[^"]+)"',
     flags=re.IGNORECASE,
 )
-_TMDB_IMAGE_PATH_RE = re.compile(r"^/[A-Za-z0-9._-]+$")
+_TMDB_IMAGE_PATH_RE = re.compile(
+    r"^/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$", re.IGNORECASE
+)
 _TMDB_IMAGE_SIZES = {"w500", "w780", "w1280", "original"}
 _MAX_TMDB_IMAGE_BYTES = 10 * 1024 * 1024
 
@@ -37,11 +43,19 @@ def _cache_get(key: str):
     if time.time() > expires_at:
         _CACHE.pop(key, None)
         return None
+    _CACHE.move_to_end(key)
     return value
 
 
 def _cache_set(key: str, value):
+    now = time.time()
+    for cached_key, (expires_at, _) in list(_CACHE.items()):
+        if expires_at <= now:
+            _CACHE.pop(cached_key, None)
     _CACHE[key] = (time.time() + _TTL_SECONDS, value)
+    _CACHE.move_to_end(key)
+    while len(_CACHE) > _CACHE_MAX_ENTRIES:
+        _CACHE.popitem(last=False)
 
 
 async def fetch_tmdb_image(
@@ -56,23 +70,43 @@ async def fetch_tmdb_image(
             timeout=8,
             follow_redirects=False,
         ) as client:
-            response = await client.get(f"/{size}{path}", headers={"Accept": "image/*"})
-            response.raise_for_status()
+            async with client.stream(
+                "GET", f"/{size}{path}", headers={"Accept": "image/*"}
+            ) as response:
+                response.raise_for_status()
+                content_type = (
+                    response.headers.get("content-type", "").split(";", 1)[0].lower()
+                )
+                if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+                    raise ValueError("Movie artwork is unavailable")
+                if response.headers.get("content-encoding", "identity") not in {
+                    "",
+                    "identity",
+                }:
+                    raise ValueError("Movie artwork is unavailable")
+                raw_length = response.headers.get("content-length")
+                if raw_length is not None:
+                    try:
+                        if int(raw_length) > _MAX_TMDB_IMAGE_BYTES:
+                            raise ValueError("Movie artwork is unavailable")
+                    except ValueError as exc:
+                        raise ValueError("Movie artwork is unavailable") from exc
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > _MAX_TMDB_IMAGE_BYTES:
+                        raise ValueError("Movie artwork is unavailable")
     except httpx.HTTPError as exc:
         raise ValueError("Movie artwork is unavailable") from exc
-
-    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise ValueError("Movie artwork is unavailable")
-    if len(response.content) > _MAX_TMDB_IMAGE_BYTES:
-        raise ValueError("Movie artwork is unavailable")
-    return response.content, content_type
+    return bytes(content), content_type
 
 
 async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:
     q = q.strip()
     if not q:
         return []
+    if len(q) > TMDB_SEARCH_QUERY_MAX_LENGTH:
+        raise ValueError("TMDB search query is too long")
 
     key = f"multi:{q.lower()}"
     cached = _cache_get(key)
@@ -128,6 +162,8 @@ async def tmdb_search_multi(q: str) -> list[dict[str, Any]]:
                 "genre_ids": genre_ids,
             }
         )
+        if len(out) >= _TMDB_SEARCH_RESULT_LIMIT:
+            break
 
     _cache_set(key, out)
     return out

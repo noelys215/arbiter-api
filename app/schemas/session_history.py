@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.users import AvatarFields
 
@@ -23,15 +23,8 @@ class CompletedParticipantOut(AvatarFields):
     criteria: dict | None = None
 
 
-class CompletedVoteOut(BaseModel):
-    participant_id: UUID
-    round: int
-    vote: Literal["yes", "no"]
-
-
 class CompletedCandidateOut(BaseModel):
     id: UUID
-    source_watchlist_item_id: UUID
     source_title_id: UUID | None = None
     source: str | None
     source_id: str | None
@@ -49,9 +42,6 @@ class CompletedCandidateOut(BaseModel):
     total_vote_count: int | None
     is_winner: bool
     is_finalist: bool
-    votes: list[CompletedVoteOut] = Field(default_factory=list)
-
-
 class CompletedSessionOut(BaseModel):
     session_id: UUID
     group_id: UUID
@@ -83,4 +73,6 @@ class GroupMovieNightPage(BaseModel):
 
 
 class WatchedStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: WatchedStatus

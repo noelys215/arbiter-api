@@ -38,8 +38,9 @@ from app.services.watchlist import assert_user_in_group
 
 
 def _canonicalize_constraints(payload: dict) -> TonightConstraints:
-    # Force canonical normalization using your Phase 5.1 model
-    c = TonightConstraints.model_validate(payload or {})
+    persisted = dict(payload or {})
+    persisted.pop("__session_runtime_v1", None)
+    c = TonightConstraints.model_validate(persisted)
     return c
 
 
@@ -1551,7 +1552,12 @@ def _deterministic_shuffle(items: list[WatchlistItem], seed: int) -> list[Watchl
 
 SESSION_RUNTIME_KEY = "__session_runtime_v1"
 ROUND_TIMER_SECONDS = 60
-WATCH_PARTY_ALLOWED_HOSTS = ("teleparty.com", "netflixparty.com")
+WATCH_PARTY_ALLOWED_HOSTS = {
+    "teleparty.com",
+    "www.teleparty.com",
+    "netflixparty.com",
+    "www.netflixparty.com",
+}
 
 
 @dataclass
@@ -1616,18 +1622,20 @@ def _normalize_watch_party_url(value: str | None) -> str | None:
     if not cleaned:
         return None
 
-    parsed = urlparse(cleaned)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("watch party URL must use http or https")
-    if not parsed.netloc:
-        raise ValueError("watch party URL must include a host")
-
-    host = parsed.netloc.split("@")[-1].split(":")[0].lower().strip(".")
-    if not host or not any(
-        host == allowed or host.endswith(f".{allowed}")
-        for allowed in WATCH_PARTY_ALLOWED_HOSTS
-    ):
+    try:
+        parsed = urlparse(cleaned)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("watch party URL is invalid") from exc
+    if parsed.scheme.lower() != "https":
+        raise ValueError("watch party URL must use https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("watch party URL must not include credentials")
+    if host is None or host.lower() not in WATCH_PARTY_ALLOWED_HOSTS:
         raise ValueError("watch party URL must be a Teleparty link")
+    if port not in {None, 443}:
+        raise ValueError("watch party URL must use the standard HTTPS port")
 
     return cleaned
 

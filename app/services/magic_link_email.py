@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import quote_plus
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from app.core.config import settings
 from app.services.resend_email import send_resend_email
@@ -10,10 +10,11 @@ def magic_link_email_configured() -> bool:
     return bool((settings.resend_api_key or "").strip() and (settings.resend_from_email or "").strip())
 
 
-def build_magic_link(token: str) -> str:
+def build_magic_link(grant: str) -> str:
     base = settings.magic_link_verify_url_value().strip()
-    separator = "&" if "?" in base else "?"
-    return f"{base}{separator}token={quote_plus(token)}"
+    parsed = urlsplit(base)
+    fragment = f"grant={quote(grant, safe='')}"
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, fragment))
 
 
 async def send_magic_link_email(*, to_email: str, magic_link_url: str) -> None:

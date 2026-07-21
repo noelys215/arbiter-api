@@ -2,6 +2,8 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
+from app.services.sessions import _normalize_watch_party_url
+
 from social_helpers import (
     add_friend_to_group,
     add_friend_to_group_with_tokens,
@@ -1401,7 +1403,7 @@ async def test_swipe_timer_starts_only_after_all_users_confirm_ready(
             recipient_email=user_b["email"],
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
@@ -1477,7 +1479,7 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
             recipient_email=user_b["email"],
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
@@ -1543,3 +1545,26 @@ async def test_user_can_unready_after_confirm_to_edit_preferences(
         assert state_after_unready["round"] == 0
         assert state_after_unready["phase"] in ("collecting", "waiting")
         assert state_after_unready["user_locked"] is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://www.teleparty.com/join/insecure",
+        "javascript://www.teleparty.com/join/unsafe",
+        "https://user@www.teleparty.com/join/credentials",
+        "https://www.teleparty.com.evil.example/join/lookalike",
+        "https://subdomain.teleparty.com/join/not-allowlisted",
+        "https://www.teleparty.com./join/trailing-dot",
+        "https://www.teleparty.com:8443/join/nonstandard-port",
+    ],
+)
+def test_watch_party_url_rejects_unsafe_or_lookalike_urls(url):
+    with pytest.raises(ValueError):
+        _normalize_watch_party_url(url)
+
+
+def test_watch_party_url_accepts_exact_https_hostname():
+    url = "https://www.teleparty.com/join/abc123"
+
+    assert _normalize_watch_party_url(url) == url

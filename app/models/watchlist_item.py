@@ -19,7 +19,7 @@ class WatchlistItem(Base):
     title_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), sa.ForeignKey("titles.id"), nullable=False, index=True)
     added_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        sa.ForeignKey("users.id"),
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

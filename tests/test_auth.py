@@ -1,4 +1,13 @@
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
+import jwt
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.models.auth_session import AuthSession
+from app.models.magic_link_grant import MagicLinkGrant
+from app.models.oauth_identity import OAuthIdentity
 
 pytestmark = pytest.mark.anyio
 
@@ -162,7 +171,7 @@ async def test_social_oauth_endpoints_require_provider_config(client):
 
 async def test_logout_revokes_auth_cookie(client, user_factory, login_helper):
     user = await user_factory(client, display_name="A")
-    await login_helper(client, email=user["email"], password=user["password"])
+    copied_token = await login_helper(client, email=user["email"], password=user["password"])
 
     me_before = await client.get("/me")
     assert me_before.status_code == 200
@@ -173,6 +182,43 @@ async def test_logout_revokes_auth_cookie(client, user_factory, login_helper):
 
     me_after = await client.get("/me")
     assert me_after.status_code in (401, 403)
+
+    client.cookies.set("access_token", copied_token)
+    replay = await client.get("/me")
+    assert replay.status_code == 401
+
+
+async def test_login_persists_typed_jti_session(
+    client, db_session, user_factory, login_helper
+):
+    user = await user_factory(client)
+    token = await login_helper(client, email=user["email"], password=user["password"])
+    claims = jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=["HS256"],
+        options={"require": ["sub", "jti", "type", "iat", "exp"]},
+    )
+
+    assert claims["type"] == "access"
+    assert claims["jti"]
+    session = (
+        await db_session.execute(
+            select(AuthSession).where(AuthSession.jti == claims["jti"])
+        )
+    ).scalar_one()
+    assert str(session.user_id) == user["id"]
+    assert session.revoked_at is None
+
+
+async def test_access_token_requires_persisted_session(client, user_factory):
+    from app.core.security import create_access_token
+
+    user = await user_factory(client)
+    token, _expires_at = create_access_token(subject=user["id"], jti="missing-session")
+    client.cookies.set("access_token", token)
+
+    assert (await client.get("/me")).status_code == 401
 
 
 async def test_logout_clears_oauth_session_cookie(client):
@@ -191,7 +237,9 @@ async def test_logout_clears_oauth_session_cookie(client):
     assert "Max-Age=0" in session_clear_headers[0]
 
 
-async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monkeypatch):
+async def test_google_callback_fetches_missing_avatar_from_userinfo(
+    client, db_session, monkeypatch
+):
     from app.api.routes import auth as auth_routes
 
     class _FakeProfileResponse:
@@ -201,6 +249,8 @@ async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monk
         def json():
             return {
                 "email": "google-avatar@example.com",
+                "sub": "google-avatar-subject",
+                "email_verified": True,
                 "name": "Google Avatar",
                 "picture": "https://example.com/google-avatar.png",
             }
@@ -208,7 +258,14 @@ async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monk
     class _FakeGoogleClient:
         async def authorize_access_token(self, request):
             _ = request
-            return {"userinfo": {"email": "google-avatar@example.com", "name": "Google Avatar"}}
+            return {
+                "userinfo": {
+                    "email": "google-avatar@example.com",
+                    "sub": "google-avatar-subject",
+                    "email_verified": True,
+                    "name": "Google Avatar",
+                }
+            }
 
         async def parse_id_token(self, request, token):
             _ = (request, token)
@@ -231,6 +288,100 @@ async def test_google_callback_fetches_missing_avatar_from_userinfo(client, monk
     me = await client.get("/me")
     assert me.status_code == 200, me.text
     assert me.json()["avatar_url"] == "https://example.com/google-avatar.png"
+    identity = (
+        await db_session.execute(
+            select(OAuthIdentity).where(
+                OAuthIdentity.provider == "google",
+                OAuthIdentity.provider_subject == "google-avatar-subject",
+            )
+        )
+    ).scalar_one()
+    assert str(identity.user_id) == me.json()["id"]
+
+
+async def test_google_callback_requires_subject_and_verified_email(client, monkeypatch):
+    from app.api.routes import auth as auth_routes
+
+    class _FakeGoogleClient:
+        def __init__(self, claims):
+            self.claims = claims
+
+        async def authorize_access_token(self, request):
+            _ = request
+            return {"userinfo": self.claims}
+
+        async def parse_id_token(self, request, token):
+            _ = (request, token)
+            return self.claims
+
+        async def get(self, path, token=None):
+            raise AssertionError(f"unexpected profile fetch: {path}")
+
+    for claims, expected_reason in (
+        (
+            {
+                "email": "missing-sub@example.com",
+                "email_verified": True,
+                "name": "Missing Sub",
+                "picture": "https://example.com/a.png",
+            },
+            "google_subject_required",
+        ),
+        (
+            {
+                "email": "unverified@example.com",
+                "sub": "unverified-subject",
+                "email_verified": False,
+                "name": "Unverified",
+                "picture": "https://example.com/b.png",
+            },
+            "google_email_unverified",
+        ),
+    ):
+        monkeypatch.setattr(
+            auth_routes, "get_oauth_client", lambda provider, c=claims: _FakeGoogleClient(c)
+        )
+        callback = await client.get("/auth/google/callback", follow_redirects=False)
+        assert callback.status_code == 302
+        assert expected_reason in callback.headers["location"]
+
+
+async def test_google_does_not_silently_link_existing_email(
+    client, db_session, user_factory, monkeypatch
+):
+    from app.api.routes import auth as auth_routes
+
+    existing = await user_factory(client, email="owned-email@example.com")
+    claims = {
+        "email": existing["email"],
+        "sub": "new-google-subject",
+        "email_verified": True,
+        "name": "Provider Name",
+        "picture": "https://example.com/provider.png",
+    }
+
+    class _FakeGoogleClient:
+        async def authorize_access_token(self, request):
+            _ = request
+            return {"userinfo": claims}
+
+        async def parse_id_token(self, request, token):
+            _ = (request, token)
+            return claims
+
+    monkeypatch.setattr(auth_routes, "get_oauth_client", lambda provider: _FakeGoogleClient())
+
+    callback = await client.get("/auth/google/callback", follow_redirects=False)
+    assert callback.status_code == 302
+    assert "google_identity_conflict" in callback.headers["location"]
+    identity = (
+        await db_session.execute(
+            select(OAuthIdentity).where(
+                OAuthIdentity.provider_subject == "new-google-subject"
+            )
+        )
+    ).scalar_one_or_none()
+    assert identity is None
 
 
 async def test_magic_link_request_sends_email_when_configured(client, monkeypatch):
@@ -242,6 +393,9 @@ async def test_magic_link_request_sends_email_when_configured(client, monkeypatc
         sent_payload["to_email"] = to_email
         sent_payload["magic_link_url"] = magic_link_url
 
+    async def _allow_rate_limit(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
     monkeypatch.setattr(auth_routes.settings, "resend_from_email", "Arbiter <no-reply@example.com>")
     monkeypatch.setattr(auth_routes.settings, "env", "production")
@@ -251,28 +405,50 @@ async def test_magic_link_request_sends_email_when_configured(client, monkeypatc
         "https://www.arbitertv.com/auth/magic-link/verify",
     )
     monkeypatch.setattr(auth_routes, "send_magic_link_email", _fake_send_magic_link_email)
+    monkeypatch.setattr(auth_routes, "enforce_auth_rate_limit", _allow_rate_limit)
 
     response = await client.post(
         "/auth/magic-link/request",
         json={"email": "magic@example.com"},
+        headers={"Origin": "http://localhost:5173"},
     )
     assert response.status_code == 200, response.text
     assert response.json() == {"ok": True}
     assert sent_payload["to_email"] == "magic@example.com"
-    assert sent_payload["magic_link_url"].startswith(
-        "https://www.arbitertv.com/auth/magic-link/verify?token="
+    parsed = urlsplit(sent_payload["magic_link_url"])
+    assert parsed.query == ""
+    assert parsed.fragment.startswith("grant=")
+    assert client.cookies.get("magic_link_intent")
+
+
+async def test_magic_link_verify_creates_user_and_authenticates(
+    client, monkeypatch
+):
+    from app.api.routes import auth as auth_routes
+
+    sent: dict[str, str] = {}
+
+    async def _send(*, to_email: str, magic_link_url: str):
+        sent["email"] = to_email
+        sent["url"] = magic_link_url
+
+    monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(auth_routes.settings, "resend_from_email", "sender@example.com")
+    monkeypatch.setattr(auth_routes, "send_magic_link_email", _send)
+
+    requested = await client.post(
+        "/auth/magic-link/request", json={"email": "new.magic@example.com"}
     )
+    assert requested.status_code == 200
+    grant = parse_qs(urlsplit(sent["url"]).fragment)["grant"][0]
 
-
-async def test_magic_link_verify_creates_user_and_authenticates(client):
-    from app.core.security import create_magic_link_token
-
-    token = create_magic_link_token("new.magic@example.com")
-    response = await client.get(f"/auth/magic-link/verify?token={token}", follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers["location"] == (
-        "http://localhost:5173/app?auth=magic-link"
+    response = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": grant},
+        follow_redirects=False,
     )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
     me = await client.get("/me")
     assert me.status_code == 200, me.text
@@ -281,10 +457,98 @@ async def test_magic_link_verify_creates_user_and_authenticates(client):
     assert data["username"]
 
 
-async def test_magic_link_verify_rejects_invalid_token(client):
-    response = await client.get("/auth/magic-link/verify?token=invalid", follow_redirects=False)
-    assert response.status_code == 302
-    assert "oauth_error=magic_link_invalid" in str(response.headers.get("location"))
+async def test_magic_link_verify_rejects_invalid_grant(client):
+    client.cookies.set(
+        "magic_link_intent", "x" * 43, path="/auth/magic-link/verify"
+    )
+    response = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": "y" * 43},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "magic_link_invalid"}
+
+
+async def test_magic_link_verify_only_accepts_strict_post_json(client):
+    query_attempt = await client.get(
+        "/auth/magic-link/verify?grant=" + "x" * 43,
+        follow_redirects=False,
+    )
+    assert query_attempt.status_code == 405
+
+    extra_field = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": "x" * 43, "intent": "must-come-from-cookie"},
+        follow_redirects=False,
+    )
+    assert extra_field.status_code == 422
+
+    coerced = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": 12345678901234567890123456789012},
+        follow_redirects=False,
+    )
+    assert coerced.status_code == 422
+
+
+async def test_magic_link_is_intent_bound_hashed_and_one_time(
+    client, client_factory, db_session, monkeypatch
+):
+    from app.api.routes import auth as auth_routes
+
+    sent: dict[str, str] = {}
+
+    async def _send(*, to_email: str, magic_link_url: str):
+        sent["url"] = magic_link_url
+
+    monkeypatch.setattr(auth_routes.settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(auth_routes.settings, "resend_from_email", "sender@example.com")
+    monkeypatch.setattr(auth_routes, "send_magic_link_email", _send)
+
+    requested = await client.post(
+        "/auth/magic-link/request", json={"email": "bound.magic@example.com"}
+    )
+    assert requested.status_code == 200
+    grant = parse_qs(urlsplit(sent["url"]).fragment)["grant"][0]
+    intent = client.cookies.get("magic_link_intent")
+    assert intent
+
+    stored = (
+        await db_session.execute(
+            select(MagicLinkGrant).where(MagicLinkGrant.email == "bound.magic@example.com")
+        )
+    ).scalar_one()
+    assert stored.grant_hash != grant
+    assert stored.intent_hash != intent
+    assert len(stored.grant_hash) == len(stored.intent_hash) == 64
+
+    async with client_factory() as other_browser:
+        mismatch = await other_browser.post(
+            "/auth/magic-link/verify",
+            json={"grant": grant},
+            follow_redirects=False,
+        )
+    assert mismatch.status_code == 400
+    assert mismatch.json() == {"detail": "magic_link_intent_required"}
+
+    accepted = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": grant},
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 200
+
+    client.cookies.set(
+        "magic_link_intent", intent, path="/auth/magic-link/verify"
+    )
+    replay = await client.post(
+        "/auth/magic-link/verify",
+        json={"grant": grant},
+        follow_redirects=False,
+    )
+    assert replay.status_code == 400
+    assert replay.json() == {"detail": "magic_link_invalid"}
 
 
 async def test_local_auth_bypass_requires_configuration(client, monkeypatch):
@@ -320,12 +584,18 @@ async def test_local_auth_bypass_is_hidden_outside_local_env(client, monkeypatch
     monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_token", "expected-token")
     monkeypatch.setattr(auth_routes.settings, "local_auth_bypass_email", "local@example.com")
 
-    response = await client.post("/auth/local-bypass", json={"token": "expected-token"})
+    response = await client.post(
+        "/auth/local-bypass",
+        json={"token": "expected-token"},
+        headers={"Origin": "http://localhost:5173"},
+    )
 
     assert response.status_code == 404
 
 
-async def test_local_auth_bypass_creates_user_and_authenticates(client, monkeypatch):
+async def test_local_auth_bypass_creates_user_and_authenticates(
+    client, db_session, monkeypatch
+):
     from app.api.routes import auth as auth_routes
 
     monkeypatch.setattr(auth_routes.settings, "env", "test")
@@ -348,6 +618,12 @@ async def test_local_auth_bypass_creates_user_and_authenticates(client, monkeypa
     assert data["email"] == "local@example.com"
     assert data["display_name"] == "Local Tester"
     assert data["avatar_url"] == "https://example.com/local.png"
+    identities = (
+        await db_session.execute(
+            select(OAuthIdentity).where(OAuthIdentity.user_id == data["id"])
+        )
+    ).scalars().all()
+    assert identities == []
 
 
 async def test_local_auth_bypass_supports_secondary_user(client, client_factory, monkeypatch):

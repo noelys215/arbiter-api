@@ -4,12 +4,13 @@ from collections.abc import AsyncGenerator
 import uuid
 
 from fastapi import Cookie, Depends, HTTPException, status
-from jose import jwt, JWTError
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.security import decode_access_token
 from app.db.session import get_db_session
+from app.models.auth_session import AuthSession
 from app.models.user import User
 
 COOKIE_NAME = "access_token"
@@ -24,25 +25,29 @@ async def get_user_from_access_token(db: AsyncSession, access_token: str | None)
     if not access_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
+    claims = decode_access_token(access_token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    sub, jti = claims
+
     try:
-        payload = jwt.decode(access_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        sub = payload.get("sub")
-        if not sub:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        try:
-            user_id = uuid.UUID(sub)
-        except ValueError:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-    except JWTError:
+        user_id = uuid.UUID(sub)
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User)
+        .join(AuthSession, AuthSession.user_id == User.id)
+        .where(
+            User.id == user_id,
+            AuthSession.jti == jti,
+            AuthSession.revoked_at.is_(None),
+            AuthSession.expires_at > sa.func.now(),
+        )
+    )
     user = result.scalar_one_or_none()
     if not user:
-        # This is the “stale cookie / DB reset” case
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="Invalid session")
 
     return user
 

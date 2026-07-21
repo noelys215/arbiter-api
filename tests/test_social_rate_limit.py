@@ -51,7 +51,7 @@ def request_for(ip: str) -> Request:
             "type": "http",
             "method": "POST",
             "path": "/friends/requests",
-            "headers": [(b"x-forwarded-for", f"spoofed, {ip}".encode())],
+            "headers": [(b"x-forwarded-for", f"{ip}, render-proxy".encode())],
             "client": ("127.0.0.1", 1234),
         }
     )

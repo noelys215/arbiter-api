@@ -1,4 +1,5 @@
 import json
+from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator, model_validator
@@ -111,6 +112,40 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
         if self.auth_cookie_samesite_value() == "none" and not self.auth_cookie_secure_value():
             raise ValueError("AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true")
+        if not self.is_local_env():
+            if self.jwt_algorithm != "HS256":
+                raise ValueError("JWT_ALGORITHM must be HS256 in production")
+            if len(self.jwt_secret.encode("utf-8")) < 32:
+                raise ValueError("JWT_SECRET must be at least 32 bytes in production")
+            origins = self.cors_origin_list()
+            if not origins or "*" in origins:
+                raise ValueError("Production CORS_ORIGINS must be an explicit allowlist")
+            for origin in origins:
+                parsed = urlsplit(origin)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.path
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError("Production CORS origins must be HTTPS origins")
+            for configured_url in (
+                self.oauth_google_callback_url,
+                self.oauth_frontend_success_url,
+                self.oauth_frontend_failure_url,
+                self.magic_link_verify_url,
+            ):
+                parsed = urlsplit(configured_url)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                ):
+                    raise ValueError("Production authentication URLs must use HTTPS")
         return self
 
     def is_local_env(self) -> bool:
@@ -139,7 +174,7 @@ class Settings(BaseSettings):
 
     def magic_link_verify_url_value(self) -> str:
         if self.is_local_env():
-            return "http://localhost:8000/auth/magic-link/verify"
+            return "http://localhost:5173/auth/magic-link/verify"
         return self.magic_link_verify_url
 
     def auth_cookie_samesite_value(self) -> str:

@@ -11,6 +11,7 @@ from fastapi import WebSocket
 
 
 logger = logging.getLogger(__name__)
+MAX_ACCOUNT_CONNECTIONS_PER_USER = 8
 
 
 class AccountRealtimeEvent(TypedDict, total=False):
@@ -74,10 +75,16 @@ class AccountRealtimeHub:
         self._connections: dict[UUID, set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
-    async def connect(self, user_id: UUID, websocket: WebSocket) -> None:
-        await websocket.accept()
+    async def connect(self, user_id: UUID, websocket: WebSocket) -> bool:
         async with self._lock:
+            if len(self._connections[user_id]) >= MAX_ACCOUNT_CONNECTIONS_PER_USER:
+                if not self._connections[user_id]:
+                    self._connections.pop(user_id, None)
+                await websocket.close(code=1008)
+                return False
+            await websocket.accept()
             self._connections[user_id].add(websocket)
+        return True
 
     async def disconnect(self, user_id: UUID, websocket: WebSocket) -> None:
         async with self._lock:
@@ -111,6 +118,16 @@ class AccountRealtimeHub:
                 disconnected.append((user_id, websocket))
 
         for user_id, websocket in disconnected:
+            await self.disconnect(user_id, websocket)
+
+    async def disconnect_user(self, user_id: UUID) -> None:
+        async with self._lock:
+            sockets = list(self._connections.get(user_id, set()))
+        for websocket in sockets:
+            try:
+                await websocket.close(code=1008)
+            except Exception:
+                pass
             await self.disconnect(user_id, websocket)
 
 

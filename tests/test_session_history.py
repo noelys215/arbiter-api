@@ -94,7 +94,7 @@ async def test_invalid_mood_cue_is_rejected(async_client, user_factory, login_he
             "candidate_count": 5,
         },
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 @pytest.mark.anyio
@@ -114,6 +114,11 @@ async def test_completion_is_idempotent_and_survives_watchlist_deletion(
     assert len(first_body["participants"]) == 1
     assert len(first_body["candidates"]) == 2
     assert sum(candidate["is_winner"] for candidate in first_body["candidates"]) == 1
+    assert all("votes" not in candidate for candidate in first_body["candidates"])
+    assert all(
+        "source_watchlist_item_id" not in candidate
+        for candidate in first_body["candidates"]
+    )
 
     second = await async_client.post(f"/sessions/{session_id}/completion")
     assert second.status_code == 200, second.text

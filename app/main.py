@@ -2,10 +2,10 @@ import app.db.base  # noqa: F401
 import app.models  # noqa: F401
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_mcp import FastApiMCP
 try:
     from starlette.middleware.sessions import SessionMiddleware
 except ModuleNotFoundError:  # pragma: no cover - depends on optional dependency
@@ -33,11 +33,27 @@ from app.api.routes.feedback import router as feedback_router
 from app.api.routes.group_insights import router as group_insights_router
 from app.api.routes.movie_presentation import router as movie_presentation_router
 from app.middleware.feedback_body_limit import FeedbackBodyLimitMiddleware
+from app.middleware.security_boundary import SecurityBoundaryMiddleware
 from app.services.feedback_rate_limit import close_feedback_rate_limiter
 
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Watch Picker API", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await close_feedback_rate_limiter()
+
+
+app = FastAPI(
+    title="Watch Picker API",
+    version="0.1.0",
+    docs_url="/docs" if settings.is_local_env() else None,
+    redoc_url="/redoc" if settings.is_local_env() else None,
+    openapi_url="/openapi.json" if settings.is_local_env() else None,
+    lifespan=lifespan,
+)
 
 local_cors_origin_regex = (
     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
@@ -77,9 +93,12 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list(),
     allow_origin_regex=local_cors_origin_regex,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type"],
+    max_age=600,
 )
+
+app.add_middleware(SecurityBoundaryMiddleware, max_body_bytes=64 * 1024)
 
 app.include_router(friends_router)
 app.include_router(group_invites_router)
@@ -95,7 +114,10 @@ app.include_router(tmdb_router)
 app.include_router(watchlist_router)
 app.include_router(sessions_router)
 
-mcp = FastApiMCP(app)
-mcp.mount_http()
+if settings.is_local_env():
+    # Development-only tooling. fastapi-mcp's transport uses a process-wide
+    # HTTP client and is not an authenticated production boundary.
+    from fastapi_mcp import FastApiMCP
 
-app.add_event_handler("shutdown", close_feedback_rate_limiter)
+    mcp = FastApiMCP(app)
+    mcp.mount_http()

@@ -117,7 +117,8 @@ async def watchlist_updates_ws(websocket: WebSocket, group_id: UUID):
             return
         break
 
-    await watchlist_realtime_hub.connect(group_id, user.id, websocket)
+    if not await watchlist_realtime_hub.connect(group_id, user.id, websocket):
+        return
     try:
         await websocket.send_json(
             {
@@ -127,10 +128,15 @@ async def watchlist_updates_ws(websocket: WebSocket, group_id: UUID):
         )
         while True:
             message = await websocket.receive_json()
-            if isinstance(message, dict) and message.get("type") == "ping":
+            if message == {"type": "ping"}:
                 await websocket.send_json({"type": "pong", "group_id": str(group_id)})
+            else:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
     except WebSocketDisconnect:
         pass
+    except (ValueError, UnicodeDecodeError):
+        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
     finally:
         await watchlist_realtime_hub.disconnect(group_id, websocket)
 

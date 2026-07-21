@@ -89,3 +89,20 @@ async def test_watchlist_realtime_hub_disconnects_only_requested_user():
     assert removed_socket.sent == []
     assert remaining_socket.closed_code is None
     assert remaining_socket.sent[0]["type"] == "watchlist_updated"
+
+
+@pytest.mark.anyio
+async def test_watchlist_hub_caps_connections_per_user():
+    hub = WatchlistRealtimeHub()
+    group_id = uuid4()
+    user_id = uuid4()
+    sockets = [FakeWebSocket() for _ in range(9)]
+
+    results = [
+        await hub.connect(group_id, user_id, socket)  # type: ignore[arg-type]
+        for socket in sockets
+    ]
+
+    assert results == [True] * 8 + [False]
+    assert sockets[-1].accepted is False
+    assert sockets[-1].closed_code == 1008

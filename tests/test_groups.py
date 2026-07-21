@@ -155,6 +155,7 @@ async def test_groups_full_flow_owner_member_invite_accept(client):
     member_ids = {m["id"] for m in detail["members"]}
     assert a_id in member_ids
     assert b_id in member_ids
+    assert all("email" not in member for member in detail["members"])
 
     await create_friendship(
         client, token_a=token_a, token_b=token_c, recipient_email=c_email

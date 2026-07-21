@@ -28,10 +28,10 @@ class TonightSession(Base):
         index=True,
     )
 
-    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        sa.ForeignKey("users.id"),
-        nullable=False,
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 

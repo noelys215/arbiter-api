@@ -54,7 +54,11 @@ async def test_signed_out_feedback_sends_plain_text_without_private_response_dat
         sent.append((payload, idempotency_key))
 
     monkeypatch.setattr(feedback_service, "send_resend_email", record)
-    response = await client.post("/feedback", json=feedback_payload())
+    response = await client.post(
+        "/feedback",
+        json=feedback_payload(),
+        headers={"Origin": "http://localhost:5173"},
+    )
 
     assert response.status_code == 200, response.text
     assert response.json() == {"ok": True}
@@ -359,7 +363,11 @@ async def test_production_feature_gate_disables_unprotected_public_feedback(
     monkeypatch.setattr(feedback_route.settings, "env", "production")
     monkeypatch.setattr(feedback_route.settings, "feedback_public_enabled", False)
 
-    response = await client.post("/feedback", json=feedback_payload())
+    response = await client.post(
+        "/feedback",
+        json=feedback_payload(),
+        headers={"Origin": "http://localhost:5173"},
+    )
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Feedback is currently unavailable"}

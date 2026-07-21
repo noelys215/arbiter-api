@@ -143,8 +143,8 @@ async def test_resolve_on_expiry_picks_max_yes_then_min_no(
         )
 
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
-        c_id = next(f["id"] for f in friends if f["email"] == user_c["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
+        c_id = next(f["id"] for f in friends if f["username"] == user_c["username"])
 
         r = await async_client.post("/groups", json={"name": "G"})
         assert r.status_code in (200, 201), r.text
@@ -285,7 +285,7 @@ async def test_collecting_waits_then_transitions_to_swiping(
             async_client, client_b, recipient_email=user_b["email"]
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
@@ -348,7 +348,7 @@ async def test_timer_lock_prevents_late_vote(async_client, client_factory, user_
             async_client, client_b, recipient_email=user_b["email"]
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
@@ -426,7 +426,7 @@ async def test_group_leader_can_end_session(async_client, client_factory, user_f
             async_client, client_b, recipient_email=user_b["email"]
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]
@@ -475,7 +475,7 @@ async def test_group_leader_end_marks_completed_session_ended_for_members(
             async_client, client_b, recipient_email=user_b["email"]
         )
         friends = (await async_client.get("/friends")).json()
-        b_id = next(f["id"] for f in friends if f["email"] == user_b["email"])
+        b_id = next(f["id"] for f in friends if f["username"] == user_b["username"])
 
         group = (await async_client.post("/groups", json={"name": "G"})).json()
         group_id = group["id"]

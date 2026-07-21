@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.api.deps import COOKIE_NAME, get_current_user, get_db, get_user_from_access_token
 from app.api.http_errors import permission_error, value_error
+from app.api.mutation_rate_limits import enforce_mutation_rate_limit
 from app.api.presenters.titles import build_title_out_with_taxonomy
 from app.models.watchlist_item import WatchlistItem
 from app.models.user import User
@@ -135,15 +136,19 @@ async def _session_state_response_from_view(view) -> SessionStateResponse:
 async def create_session_route(
     group_id: UUID,
     payload: CreateSessionRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
+        await enforce_mutation_rate_limit(
+            request, user=user, action="session_setup"
+        )
         sess, _, personal_preview_ids = await create_tonight_session(
             db,
             group_id=group_id,
             user_id=user.id,
-            constraints_payload=payload.constraints,
+            constraints_payload=payload.constraints.model_dump(exclude_unset=True),
             text=payload.text,
             confirm_ready=payload.confirm_ready,
             duration_seconds=payload.duration_seconds,
@@ -152,7 +157,9 @@ async def create_session_route(
         view = await get_session_state(db, session_id=sess.id, user_id=user.id)
         await db.commit()
 
-        constraints = TonightConstraints.model_validate(sess.constraints)
+        public_constraints = dict(sess.constraints or {})
+        public_constraints.pop("__session_runtime_v1", None)
+        constraints = TonightConstraints.model_validate(public_constraints)
 
         candidates_out = await asyncio.gather(
             *[_candidate_out(c) for c in sorted(view.candidates, key=lambda row: row.position)]
@@ -214,10 +221,12 @@ async def mood_cues_route():
 async def vote_route(
     session_id: UUID,
     payload: VoteRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     try:
+        await enforce_mutation_rate_limit(request, user=user, action="vote")
         await cast_vote(
             db,
             session_id=session_id,
@@ -260,7 +269,7 @@ async def complete_session_route(
         await db.commit()
         await db.refresh(
             session,
-            attribute_names=["candidates", "participant_snapshots", "vote_snapshots"],
+            attribute_names=["candidates", "participant_snapshots"],
         )
         response = completed_session_out(session)
         if changed:
@@ -409,12 +418,13 @@ async def session_updates_ws(websocket: WebSocket, session_id: UUID):
             return
         break
 
-    await session_realtime_hub.connect(
+    if not await session_realtime_hub.connect(
         session_id,
         user.id,
         view.session.group_id,
         websocket,
-    )
+    ):
+        return
     try:
         await websocket.send_json(
             {
@@ -424,10 +434,15 @@ async def session_updates_ws(websocket: WebSocket, session_id: UUID):
         )
         while True:
             message = await websocket.receive_json()
-            if isinstance(message, dict) and message.get("type") == "ping":
+            if message == {"type": "ping"}:
                 await websocket.send_json({"type": "pong", "session_id": str(session_id)})
+            else:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
     except WebSocketDisconnect:
         pass
+    except (ValueError, UnicodeDecodeError):
+        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
     finally:
         await session_realtime_hub.disconnect(session_id, websocket)
 

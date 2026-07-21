@@ -30,7 +30,9 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False)
     
     owned_groups = relationship("Group", back_populates="owner")
-    group_memberships = relationship("GroupMembership", back_populates="user")
+    group_memberships = relationship(
+        "GroupMembership", back_populates="user", passive_deletes=True
+    )
 
     __table_args__ = (
         sa.Index("uq_users_email_lower", sa.func.lower(email), unique=True),

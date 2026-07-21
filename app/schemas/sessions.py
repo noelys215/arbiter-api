@@ -1,14 +1,17 @@
 from __future__ import annotations
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.tonight_constraints import TonightConstraints
 from app.schemas.watchlist import TitleOut
 from app.schemas.users import AvatarFields
 
 class CreateSessionRequest(BaseModel):
-    constraints: dict = Field(default_factory=dict)  # we validate using TonightConstraints in service
-    text: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    constraints: TonightConstraints = Field(default_factory=TonightConstraints)
+    text: str | None = Field(default=None, max_length=500)
     confirm_ready: bool | None = None
     duration_seconds: int = Field(default=90, ge=15, le=600)
     candidate_count: int = Field(default=12, ge=1, le=30)
@@ -36,11 +39,15 @@ class CreateSessionResponse(BaseModel):
     personal_candidates: list[SessionCandidateOut] = Field(default_factory=list)
 
 class VoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     watchlist_item_id: UUID
-    vote: str = Field(pattern="^(yes|no)$")
+    vote: Literal["yes", "no"]
 
 
 class WatchPartyUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str | None = Field(default=None, max_length=2048)
 
 

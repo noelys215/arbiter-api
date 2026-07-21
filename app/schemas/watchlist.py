@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.schemas.users import AvatarFields
 
 
@@ -26,23 +26,43 @@ class TitleOut(BaseModel):
 
 
 class AddWatchlistTMDB(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["tmdb"] = "tmdb"
-    tmdb_id: int
+    tmdb_id: int = Field(ge=1)
     media_type: str = Field(pattern="^(movie|tv)$")
 
     # v1: provided by frontend from /tmdb/search
-    title: str
-    year: int | None = None
-    poster_path: str | None = None
+    title: str = Field(min_length=1, max_length=300)
+    year: int | None = Field(default=None, ge=1870, le=2100)
+    poster_path: str | None = Field(default=None, max_length=500)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title is required")
+        return cleaned
 
 
 class AddWatchlistManual(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["manual"] = "manual"
-    title: str
-    year: int | None = None
+    title: str = Field(min_length=1, max_length=300)
+    year: int | None = Field(default=None, ge=1870, le=2100)
     media_type: str = Field(pattern="^(movie|tv)$")
-    poster_path: str | None = None
-    overview: str | None = None
+    poster_path: str | None = Field(default=None, max_length=500)
+    overview: str | None = Field(default=None, max_length=5_000)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title is required")
+        return cleaned
 
 
 AddWatchlistRequest = AddWatchlistTMDB | AddWatchlistManual
@@ -50,7 +70,6 @@ AddWatchlistRequest = AddWatchlistTMDB | AddWatchlistManual
 
 class WatchlistAddedBy(AvatarFields):
     id: UUID
-    email: str
     username: str
     display_name: str
 
@@ -73,6 +92,8 @@ class WatchlistPageOut(BaseModel):
 
 
 class WatchlistPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: str | None = Field(default=None, pattern="^(watchlist|watched)$")
     snoozed_until: datetime | None = None
     remove: bool | None = None

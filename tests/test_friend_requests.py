@@ -52,15 +52,14 @@ async def test_targeted_friend_request_is_listed_and_accepted_without_groups(
         assert accepted_again.status_code == 200
         assert accepted_again.json()["already_friends"] is True
         assert (await client_b.get("/friends/requests")).json()["incoming"] == []
-        assert any(
-            friend["id"] == user_a["id"]
-            for friend in (await client_b.get("/friends")).json()
-        )
+        friends = (await client_b.get("/friends")).json()
+        assert any(friend["id"] == user_a["id"] for friend in friends)
+        assert all("email" not in friend for friend in friends)
 
     assert (await client.get("/friends/requests")).json()["outgoing"] == []
-    assert any(
-        friend["id"] == user_b["id"] for friend in (await client.get("/friends")).json()
-    )
+    friends = (await client.get("/friends")).json()
+    assert any(friend["id"] == user_b["id"] for friend in friends)
+    assert all("email" not in friend for friend in friends)
 
 
 async def test_friend_request_prevents_self_existing_and_duplicate_requests(

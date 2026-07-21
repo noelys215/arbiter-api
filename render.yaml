@@ -12,7 +12,7 @@ services:
     plan: starter
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     preDeployCommand: ./scripts/render_predeploy.sh
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log --limit-concurrency 200 --timeout-keep-alive 10 --ws-max-size 4096 --ws-max-queue 16 --ws-ping-interval 20 --ws-ping-timeout 20
     healthCheckPath: /health
     envVars:
       - key: ENV
